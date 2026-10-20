@@ -1,0 +1,84 @@
+flir_camera_calibration:
+  ros__parameters:
+    input_topic: "/image_rgb/compressed"
+    annotated_output_topic: "/calibration/image_annotated/compressed"
+    output_yaml_path: "calibration/flir_camera_info.yaml"
+    camera_serial: ""
+    camera_name: ""
+    frame_id: ""
+    sample_image_dir: "calibration/captures"
+
+    # Board type: "chessboard" (plain checkerboard) or "charuco" (ChArUco board).
+    # In charuco mode the board_cols/board_rows/square_size_m below are ignored and
+    # the charuco_* / aruco_dictionary settings define the board instead.
+    board_type: "chessboard"
+
+    # Chessboard inner-corner count, not square count. Used when board_type=chessboard.
+    board_cols: 6
+    board_rows: 5
+    square_size_m: 0.08
+
+    # ChArUco board definition. Used when board_type=charuco. squares_x/squares_y are
+    # the full square counts of the board; marker length must be < square length. Set
+    # aruco_dictionary to the predefined dictionary printed on the board.
+    charuco_squares_x: 8
+    charuco_squares_y: 7
+    charuco_square_length_m: 0.12
+    # Approximate: charuco pose uses the chessboard corners (square size), so this
+    # only needs to be a valid value < square length. Set it to the printed marker
+    # size if you have it.
+    charuco_marker_length_m: 0.09
+    aruco_dictionary: "DICT_5X5_1000"
+    # Minimum interpolated ChArUco corners to accept a capture. Sparse partial views
+    # (a few corners) make calibrateCameraCharuco throw, so reject them here.
+    charuco_min_corners: 12
+
+    # Reject motion-blurred captures: variance of the Laplacian over the board region
+    # must be >= this. Motion blur is the dominant cause of high RMS, so hold the board
+    # STILL at each pose. Scene-dependent (lighting/exposure/distance) — the preview
+    # overlay shows the live value; tune this to sit above your "moving" blur level.
+    # Set 0 to disable the gate.
+    board_min_sharpness: 150.0
+
+    min_calibration_frames: 15
+
+    # Auto-capture: when true, distinct board poses are captured automatically as
+    # frames arrive (no space key needed), and calibration runs + saves once
+    # auto_capture_target_frames are collected. Ideal for replaying a bag solo, or
+    # running headless with display_window:=false.
+    auto_capture: false
+    # Quality mode (auto_capture_target_rms > 0): keep auto-capturing distinct poses
+    # and recalibrating, then save + stop as soon as RMS <= target. This adapts the
+    # frame count to the scene instead of a fixed number. Relax the target (e.g. 2.0)
+    # if it keeps hitting the cap, or tighten it (e.g. 1.0) for a stricter result.
+    auto_capture_target_rms: 1.5
+    # Hard cap: if the target RMS is never reached, save the best result at this many
+    # frames and stop, so the run always terminates.
+    auto_capture_max_frames: 50
+    # Count mode fallback: used only when auto_capture_target_rms <= 0. Calibrates
+    # once at this fixed frame count.
+    auto_capture_target_frames: 25
+    # Minimum pose change (image position or apparent size), as a fraction of the
+    # preview width, versus every already-captured frame before a new one is taken.
+    auto_capture_min_move_frac: 0.05
+    # Minimum seconds between two auto-captures (debounce).
+    auto_capture_min_interval_sec: 0.3
+
+    display_window: true
+    window_name: "FLIR Calibration"
+    preview_scale: 1.0
+    # ChArUco marker decoding needs resolution. On the 1920-wide fisheye rig a 640
+    # preview drops most corners (auto-capture then never fires); 1280 keeps ~40 of
+    # 42 on a full board and enough on partial views. Raise toward 1920 if needed.
+    preview_max_width: 1280
+    preview_fast_check: true
+    annotated_jpeg_quality: 80
+
+    # Keep the subscription permissive so it can connect to sensor-data publishers.
+    input_qos_reliability: "best_effort"
+    # Calibration preview keeps only the newest frame to avoid UI delay buildup.
+    input_qos_depth: 1
+
+    # Publish the annotated preview more reliably for tools that inspect the overlay.
+    output_qos_reliability: "reliable"
+    output_qos_depth: 1

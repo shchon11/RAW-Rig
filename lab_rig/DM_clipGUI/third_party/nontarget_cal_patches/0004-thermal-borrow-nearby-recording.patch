@@ -1,0 +1,190 @@
+--- a/nontarget_cal/namemap.py
++++ b/nontarget_cal/namemap.py
+@@ -372,8 +372,71 @@
+     return [int(x) for x in mv[np.linspace(0, len(mv) - 1, n + 2).astype(int)[1:-1]]]
+ 
+ 
++def thermal_evidence(bag: Bag, cfg, series, tns):
++    """(geo, rep) of the thermal pair, voted one moment at a time (identify_thermal_votes). rep["confident"]:
++    enough sideways moments to stand against a map. A single moment flips about 1 time in 6 (10-03 vehicle bags:
++    164748 6:1, 164412 5:1), so 2-3 moments say little — 164612 had 2, both flipped."""
++    times = moments(bag, series["t"], series["speed"], n=cfg.get("names", {}).get("moments", 6))
++    fr = grab_frames(bag, cfg, "thermal", tns, times + [t + 2_000_000_000 for t in times])
++    K_th = np.array([680.0, 680.0, 320.0, 240.0, 0.0, 0.0])
++    votes = []
++    for f in fr:        # one moment at a time — see identify_thermal_votes
++        votes += list(pair_geometry([f], lambda ns: K_th, _pinhole_unproject, min_inliers=20).items())
++    geo, rep = identify_thermal_votes(votes, tns)
++    rep["decisive"] = sum(1 for tx, _ in rep.get("votes_tx_inliers", []) if abs(tx) > 0.5)
++    rep["min_confident"] = cfg.get("names", {}).get("thermal_min_votes_to_contradict", 4)
++    rep["confident"] = bool(geo is not None and not rep["unresolved"] and rep["decisive"] >= rep["min_confident"])
++    return geo, rep
++
++
++def bag_span(path):
++    """(start, end) ns of a recording from its metadata.yaml, or None."""
++    m = Path(path) / "metadata.yaml"
++    try:
++        md = yaml.safe_load(m.read_text())["rosbag2_bagfile_information"]
++        t0 = int(md["starting_time"]["nanoseconds_since_epoch"])
++        return t0, t0 + int(md["duration"]["nanoseconds"])
++    except (OSError, KeyError, TypeError, yaml.YAMLError):
++        return None
++
++
++def _thermal_serials(path):
++    """{namespace: serial} of the thermal cameras from DM_clipGUI's dataset_info.json, {} if absent."""
++    try:
++        cams = json.loads((Path(path) / "dataset_info.json").read_text()).get("cameras") or {}
++    except (OSError, ValueError):
++        return {}
++    return {ns: sn for sn, ns in cams.items() if str(ns).startswith("thermal")}
++
++
++def neighbour_bags(path, job_paths, window_s):
++    """Recordings within window_s of this one (gap between the two spans), nearest first: the job's bags and the
++    recordings next to it in the same folder. A neighbour whose thermal namespace→serial differs from this bag's
++    (dataset_info.json) is left out — its left/right would be about other cameras."""
++    path = Path(path).resolve()
++    me = bag_span(path)
++    if me is None or not path.is_dir():
++        return []
++    mine = _thermal_serials(path)
++    cands = {Path(p).resolve() for p in job_paths}
++    cands |= {p.resolve() for p in path.parent.iterdir() if p.is_dir() and (p / "metadata.yaml").is_file()}
++    cands.discard(path)
++    out = []
++    for c in cands:
++        sp = bag_span(c)
++        if sp is None:
++            continue
++        gap = max(0, max(sp[0], me[0]) - min(sp[1], me[1])) / 1e9
++        theirs = _thermal_serials(c)
++        if gap <= window_s and not (mine and theirs and mine != theirs):
++            out.append((gap, str(c)))
++    return [(Path(c), gap) for gap, c in sorted(out)]
++
++
+ def resolve_names(bag: Bag, bag_id: str, cfg, sensors, name_map, series, reference: dict, ev,
+-                  verify: bool = True, workdir: Path | None = None) -> dict:
++                  verify: bool = True, workdir: Path | None = None, thermal_of=None, thermal_neighbour=None) -> dict:
++    """thermal_of(): cached thermal_evidence of this bag. thermal_neighbour(): (geo, name, gap_s, rep) of the nearest
++    recording within the window whose thermal geometry is confident, or None — used when this bag's own is not."""
+     """Returns {"rgb": {canonical: ns}, "thermal": {...}, "source": str, "verification": {...}}; raises Refusal."""
+     cand, src = candidate_mapping(bag, cfg, sensors, name_map, ev)
+     allns = namespaces(bag, cfg)
+@@ -427,34 +490,43 @@
+         if cand is not None and all(c in cand["thermal"] for c in cfg["cameras"]["thermal"]):
+             mapping["thermal"] = {c: cand["thermal"][c] for c in cfg["cameras"]["thermal"]}
+         if need_geo and len(tns) == 2:
+-            fr = grab_frames(bag, cfg, "thermal", tns, times + [t + 2_000_000_000 for t in times])
+-            K_th = np.array([680.0, 680.0, 320.0, 240.0, 0.0, 0.0])
+-            votes = []
+-            for f in fr:        # one moment at a time — see identify_thermal_votes
+-                votes += list(pair_geometry([f], lambda ns: K_th, _pinhole_unproject, min_inliers=20).items())
+-            geo, rep = identify_thermal_votes(votes, tns)
++            geo, rep = thermal_of() if thermal_of else thermal_evidence(bag, cfg, series, tns)
+             ver["thermal"] = rep
++            where = "geometry"
++            if not rep["confident"] and thermal_neighbour is not None:
++                # Too few moments here — the cameras do not move between recordings minutes apart, so take the
++                # left/right of the nearest recording that measured it with confidence.
++                nb = thermal_neighbour()
++                if nb is not None:
++                    geo, nb_name, gap, nb_rep = nb
++                    rep["borrowed_from"] = {"bag": nb_name, "gap_s": round(gap, 1), "geometry": geo,
++                                            "decisive": nb_rep["decisive"], "weight_left": nb_rep["weight_left"]}
++                    where = f"the geometry of {nb_name} ({gap:.0f} s away)"
++                    ev.warn("thermal_from_neighbour",
++                            f"{bag_id}: only {rep['decisive']} sideways thermal moments (< {rep['min_confident']}); "
++                            f"using the left/right of {nb_name}, {gap:.0f} s away ({nb_rep['decisive']} moments): {geo}",
++                            f"{bag_id}: 열화상 좌우 판정 순간이 {rep['decisive']}개뿐이라(< {rep['min_confident']}) "
++                            f"{gap:.0f}초 떨어진 {nb_name} 의 좌우({nb_rep['decisive']}개 순간)를 씀: {geo}")
++            sure = rep["confident"] or where != "geometry"
+             if not mapping["thermal"]:
+-                if geo is None or rep["unresolved"]:
++                if geo is None or (not sure and rep["unresolved"]):
+                     raise E.Refusal(E.AMBIGUOUS_NAMES, f"{bag_id}: thermal camera names unknown and not resolvable "
+                                     f"from geometry ({rep['unresolved']}); pass --name-map",
+                                     f"{bag_id}: 열화상 카메라 이름을 알 수 없고 기하로도 확정 못함; --name-map 필요")
+                 mapping["thermal"] = geo
+-            elif geo is not None and not rep["unresolved"] and geo != mapping["thermal"]:
+-                # A single moment flips about 1 time in 6 (10-03 vehicle bags: 164748 6:1, 164412 5:1). With few
+-                # decisive moments that is no evidence against a serial-built map: 164612 had 2, both flipped.
+-                decisive = sum(1 for tx, _ in rep["votes_tx_inliers"] if abs(tx) > 0.5)
+-                min_contra = cfg.get("names", {}).get("thermal_min_votes_to_contradict", 4)
+-                if decisive >= min_contra:
+-                    raise E.Refusal(E.AMBIGUOUS_NAMES, f"{bag_id}: thermal map {mapping['thermal']} contradicts the "
+-                                    f"geometry {geo}",
+-                                    f"{bag_id}: 열화상 이름 대응표가 기하와 모순됨: {mapping['thermal']} vs {geo}")
+-                rep["unresolved"].append(f"thermal pair: geometry {geo} from only {decisive} moments "
+-                                         f"(< {min_contra}) — kept the map")
++            elif sure and geo != mapping["thermal"]:
++                raise E.Refusal(E.AMBIGUOUS_NAMES, f"{bag_id}: thermal map {mapping['thermal']} contradicts "
++                                f"{where}: {geo}",
++                                f"{bag_id}: 열화상 이름 대응표가 기하와 모순됨: {mapping['thermal']} vs {geo}"
++                                + ("" if where == "geometry" else f" ({rep['borrowed_from']['bag']} 기준)"))
++            elif not sure and geo is not None and geo != mapping["thermal"]:
++                rep["unresolved"].append(f"thermal pair: geometry {geo} from only {rep['decisive']} moments "
++                                         f"(< {rep['min_confident']}) and no confident recording nearby — kept the map")
+                 ev.warn("names_unverified", f"{bag_id}: thermal geometry disagrees with the map {src} but from only "
+-                        f"{decisive} moments (< {min_contra}); kept the map",
+-                        f"{bag_id}: 열화상 기하가 대응표와 다르지만 판정된 순간이 {decisive}개뿐이라(< {min_contra}) "
+-                        "대응표를 그대로 씀")
++                        f"{rep['decisive']} moments (< {rep['min_confident']}) and no confident recording nearby; "
++                        "kept the map",
++                        f"{bag_id}: 열화상 기하가 대응표와 다르지만 판정된 순간이 {rep['decisive']}개뿐이고 "
++                        f"가까운 녹화에도 확실한 판정이 없어 대응표를 그대로 씀")
+         if not mapping["thermal"]:
+             raise E.Refusal(E.UNKNOWN_NAMES, f"{bag_id}: thermal cameras not found (namespaces {tns})",
+                             f"{bag_id}: 열화상 카메라를 찾지 못함 ({tns})")
+--- a/nontarget_cal/pipeline.py
++++ b/nontarget_cal/pipeline.py
+@@ -302,13 +302,46 @@
+                 raise E.Refusal(E.NO_BAG, f"bag {p} not found (disk unplugged?)", f"bag {p}를 찾을 수 없음(디스크 연결 확인)")
+         with self.ev.stage("names") as info:
+             mapping = {}
++            thermal = {}            # resolved bag path -> thermal_evidence (a neighbour may be measured first)
++
++            def thermal_of(path, bag=None, series=None):
++                key = str(Path(path).resolve())
++                if key not in thermal:
++                    own = bag is None
++                    bag = bag or Bag(path)
++                    try:
++                        nss = namemap.namespaces(bag, self.cfg)
++                        if len(nss["thermal"]) != 2:
++                            thermal[key] = (None, {"unresolved": ["no thermal pair"], "confident": False})
++                        else:
++                            if series is None:
++                                series = preflight.sample_series(bag, self.cfg, {"rgb": {n: n for n in nss["rgb"]}},
++                                                                 log=lambda *a, **k: None)
++                            thermal[key] = namemap.thermal_evidence(bag, self.cfg, series, nss["thermal"])
++                    finally:
++                        if own:
++                            bag.close()
++                return thermal[key]
++
++            def thermal_neighbour(path):
++                window = self.cfg.get("names", {}).get("thermal_neighbour_window_s", 300)
++                for nb, gap in namemap.neighbour_bags(path, self.bags.values(), window):
++                    geo, rep = thermal_of(nb)
++                    self.ev.log(f"thermal neighbour {nb.name} ({gap:.0f} s): {geo} "
++                                f"{rep.get('decisive', 0)} moments, confident={rep.get('confident')}")
++                    if rep.get("confident"):
++                        return geo, nb.name, gap, rep
++                return None
++
+             for b, p in self.bags.items():
+                 bag = Bag(p)
+                 nss = namemap.namespaces(bag, self.cfg)
+                 s = preflight.sample_series(bag, self.cfg, {"rgb": {n: n for n in nss["rgb"]}}, log=self.ev.log)
+                 m = namemap.resolve_names(bag, b, self.cfg, self.sensors,
+                                           Path(self.a.name_map) if self.a.name_map else None, s,
+-                                          self.reference_rig(), self.ev, verify=not self.a.no_verify_names)
++                                          self.reference_rig(), self.ev, verify=not self.a.no_verify_names,
++                                          thermal_of=lambda p=p, bag=bag, s=s: thermal_of(p, bag, s),
++                                          thermal_neighbour=lambda p=p: thermal_neighbour(p))
+                 mapping[b] = m
+                 bag.close()
+                 self.ev.log(f"{b}: names from {m['source']}")

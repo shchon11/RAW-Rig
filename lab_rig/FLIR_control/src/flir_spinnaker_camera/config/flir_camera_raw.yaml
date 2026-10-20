@@ -1,0 +1,232 @@
+flir_camera:
+  ros__parameters:
+    # ==========================================================================
+    # RAW 연구 취득 프로파일 (docs/raw_capture_noise_calibration.md §3)
+    #
+    # 주행 프로파일(flir_camera.yaml)과 따로 둔다. 거기는 8대 x 30 Hz JPEG 경로에 맞춰져 있다.
+    # 여기서는 image_raw(Bayer 16-bit)와 image_raw/metadata 가 정답 데이터이고, 카메라 안의 처리
+    # (게인, WB, 감마, LUT, 결함 화소 보정, 블랙 클램프)는 전부 끈다. 노이즈 캘리브레이션
+    # (26315393 기준값, §2)과 같은 설정이어야 그 노이즈 파라미터를 그대로 쓸 수 있다.
+    #
+    # 랩 리그(2026-10): BFS 26315393 과 LUCID TRI054S 가 enp5s0(MTU 1500) 1 GbE 하나를 같이 쓴다.
+    # 그래서 패킷 크기 1400, 링크 제한은 두 카메라 합이 ~70 MB/s 를 넘지 않게 잡는다 (아래 실측).
+    # ==========================================================================
+
+    # --------------------------------------------------------------------------
+    # Base node configuration
+    # --------------------------------------------------------------------------
+    # 런치가 인벤토리의 serial 로 덮어쓴다.
+    camera_serial: ""
+    camera_index: 0
+    frame_id: "flir_camera_optical_frame"
+    # 저조도에서는 노출이 수백 ms ~ 수 초가 된다. 프레임 간격보다 넉넉히 크게.
+    acquisition_timeout_ms: 10000
+    publisher_qos_reliability: "reliable"   # reliable | best_effort
+    # image_raw 한 장이 4.6 MB 라 깊이를 줄인다 (구독자가 밀리면 발행 쪽 메모리가 깊이만큼 찬다).
+    publisher_qos_depth: 10
+    use_camera_timestamp_in_header: false
+    # header.stamp = 노출 시작 (카메라 카운터를 host 시계로 옮김). flir_camera.yaml 의 설명 참고.
+    timestamp.mode: "camera_latched"
+    timestamp.exposure_latch: "end"
+    timestamp.trigger_grid_hz: 0.0
+    timestamp.capture_offset_ns: 0
+    timestamp.trigger_grid_offset_ns: 0
+    timestamp.grid_warn_ms: 3.0
+    timestamp.latch_interval_sec: 2.0
+    # 프레임별 값은 그 프레임의 chunk 에서 읽는다 (§4.2). chunk 를 켰는데 못 읽은 프레임은
+    # metadata 의 chunk_valid=false, 값은 NaN 이다 (노드 값으로 채우지 않는다).
+    chunk_data.enable: true
+    # Timestamp · FrameID · ExposureTime | Gain · BlackLevel · CRC
+    chunk_data.selectors: ["Timestamp", "FrameID", "ExposureTime", "Gain", "BlackLevel", "CRC"]
+    camera_info.yaml_path: "calibration/flir_camera_info.yaml"
+
+    # --------------------------------------------------------------------------
+    # Pixel format / output
+    # --------------------------------------------------------------------------
+    auto_pixel_format: false
+    # BayerRG16 : 카메라가 16-bit 로 보냄 (12-bit ADC 코드 << 4, 코드 간격 16 DN). 4.61 MB/프레임
+    # BayerRG12p: 12-bit packed 로 보내고 드라이버가 BayerRG16 과 같은 스케일(<< 4)로 풀어 발행. 3.46 MB/프레임.
+    #             BayerRG16 과 같은 장면의 CFA 평균 비율이 1.00 ± 0.5% 인지 R1 로 확인한 뒤 쓴다.
+    # BayerRG8  : 8-bit 에서는 RAW 정보가 잘린다 (§3 #1). 쓰지 않는다.
+    pixel_format: "BayerRG16"
+    buffer_handling_mode: "OldestFirst"
+    # RAW 프로파일에서는 image_rgb/compressed 를 preview 모드로 만든다 (아래). ImageProcessor 를 쓰지 않아서
+    # 이 값과 rgb_encoder 는 쓰이지 않는다.
+    color_processing: "ipp"
+    rgb_encoder: "cpu"
+    gpu_demosaic: false
+
+    # --------------------------------------------------------------------------
+    # Topic output
+    # --------------------------------------------------------------------------
+    publish_raw: true
+    publish_camera_info: true
+    publish_metadata: true
+    publish_rgb_compressed: true
+    # full    : 카메라 영상을 ImageProcessor 로 RGB8 → JPEG (주행 리그). 16-bit 의 상위 8비트만 남아 저조도는 검게 나온다.
+    # preview : RAW 를 절반 해상도로 디모자이크 · 블랙 제거 · 자동 밝기 · 감마 → JPEG. GUI 미리보기 전용이다.
+    #           연구용 RGB 가 아니다 (그건 나중에 호스트 ISP 로, §7).
+    rgb_compressed_mode: "preview"
+    rgb_compression_format: "jpeg"
+    rgb_jpeg_quality: 80
+    rgb_png_compression_level: 0
+    # 초당 최대 장수 (0 = 매 프레임)
+    preview.max_rate_hz: 5.0
+    # 1 = 2x2 셀당 1픽셀 (960x600), 2 = 그 절반
+    preview.downscale: 1
+    # 0 = 자동 (G 평균이 target_mean 이 되게). 값을 주면 고정 디지털 게인.
+    preview.gain: 0.0
+    preview.target_mean: 0.18
+    # 자동 게인 상한 (풀스케일 대비 배수). 64 면 표시 풀스케일 ≈ 176 e⁻ (α 5.8) — 렌즈캡이면 검게 보인다.
+    preview.max_gain: 64.0
+    # 자동 게인을 dark 노이즈(σ)가 표시 범위의 이 비율을 넘지 않게도 묶는다 (0 = 끔).
+    preview.noise_ceiling: 0.02
+    preview.gamma: 2.2
+    # gray_world | none
+    preview.white_balance: "gray_world"
+    # 음수 = 자동 (G 의 하위 0.5%). 값을 주면 그 DN 을 블랙으로 뺀다.
+    preview.black_level_dn: -1.0
+    preview.jpeg_quality: 80
+
+    # --------------------------------------------------------------------------
+    # RAW 메타데이터 · 노드맵 덤프 (§4.1, §4.3, §4.4)
+    # --------------------------------------------------------------------------
+    # selector 에 묶인 노드라 camera.* 한 줄로는 안 들어간다. camera.* 를 다 적용하고 다시 읽어 본 뒤에
+    # 적용하고, 다시 읽어 로그 · metadata 에 남긴다. NaN(키 없음) = 카메라 값을 그대로 둔다.
+    # WB 비율 (BalanceWhiteAuto=Off 가 먼저여야 쓸 수 있다)
+    raw.balance_ratio_red: 1.0
+    raw.balance_ratio_blue: 1.0
+    # 블랙 레벨 (%). 기준 측정은 0.99999 → offset 약 633 DN @24 µs
+    raw.black_level_percent: 1.0
+    # 포화 코드값 (R1.4). 26315393 실측 65516 = 16·4094 + 12 (0 dB, Bit12, BlackLevel 1%, 2026-10-19).
+    # 선언값 65520 이 아니다. BlackLevel 을 바꾸면 끝자리(위상)가 바뀐다. 0 = 모름.
+    raw.white_level_dn: 65516
+    # 설정 직후 · 실행 중 설정을 바꾼 뒤(2초 뒤) 노드맵 전체를 JSON 으로 남긴다.
+    # <dir>/<serial>_<YYYYmmdd_HHMMSS>_nodemap.json + <serial>_latest_nodemap.json. 상대 경로는 CWD(리포 루트) 기준.
+    nodemap_dump_dir: "bags/nodemap"
+    # DeviceTemperature 를 읽는 주기 (s). metadata.device_temperature_c
+    temperature.interval_sec: 1.0
+
+    # --------------------------------------------------------------------------
+    # Acquisition / FPS
+    # --------------------------------------------------------------------------
+    # false: 자유 실행. 노출이 길면 그만큼 느려지고, 짧으면 링크 제한만큼 빨라진다.
+    # true 로 켜면 노출 시간 상한이 1/fps 로 묶인다 — 저조도 장노출을 못 준다.
+    camera.AcquisitionFrameRateEnable: false
+
+    # --------------------------------------------------------------------------
+    # Exposure
+    # --------------------------------------------------------------------------
+    # Off | Once | Continuous. RAW 데이터는 노출을 고정하고 찍는다 (chunk 가 프레임별 실제 값을 남긴다).
+    camera.ExposureAuto: "Off"
+    # Exposure time, in microseconds.
+    camera.ExposureTime: 20000.0
+
+    # --------------------------------------------------------------------------
+    # Gain
+    # --------------------------------------------------------------------------
+    # Off | Once | Continuous
+    camera.GainAuto: "Off"
+    # Gain in dB. 0 dB = 기준 캘리브레이션 조건 (§3 #4). 게인을 바꾸면 그 게인으로 §6 을 다시 한다.
+    camera.GainDB_Val: 0.0
+
+    # --------------------------------------------------------------------------
+    # ISP off — RAW 에 아무 처리도 구워지지 않게 (§3 #5–9)
+    # --------------------------------------------------------------------------
+    # 12-bit ADC. 10-bit 면 0 dB 에서 코드 한 칸이 약 11 e⁻ 로 read noise 보다 크다. Bit10 | Bit12
+    camera.AdcBitDepth: "Bit12"
+    # 블랙 클램프를 켜면 블랙 근처가 잘린다 (3DRAW 야간 G 픽셀 최대 45% 가 최저 코드).
+    camera.BlackLevelClampingEnable: false
+    # Off | Once | Continuous. 비율은 위 raw.balance_ratio_*.
+    camera.BalanceWhiteAuto: "Off"
+    camera.GammaEnable: false
+    camera.LUTEnable: false
+    # hot pixel 은 §6 에서 직접 잰다.
+    camera.DefectCorrectStaticEnable: false
+
+    # --------------------------------------------------------------------------
+    # ROI / resolution
+    # --------------------------------------------------------------------------
+    camera.Width: 1920
+    camera.Height: 1200
+    # camera.OffsetX: 0
+    # camera.OffsetY: 0
+
+    # --------------------------------------------------------------------------
+    # Trigger / external I/O
+    # --------------------------------------------------------------------------
+    hardware_trigger.role: "none"        # none | master | slave
+    hardware_trigger.master.output_line: "Line1"
+    hardware_trigger.master.line_source: "ExposureActive"
+    hardware_trigger.master.line_source_fallbacks: ["FrameTriggerWait", "UserOutput0"]
+    hardware_trigger.master.enable_3v3: true
+    hardware_trigger.master.require_3v3: true
+    hardware_trigger.master.line_3v3: "Line2"
+    hardware_trigger.master.line_3v3_enable_nodes: ["V3_3Enable", "Line3V3Enable", "LineVoltageEnable"]
+    hardware_trigger.slave.trigger_source: "Line3"
+    hardware_trigger.slave.trigger_activation: "RisingEdge"
+    hardware_trigger.slave.trigger_overlap: "ReadOut"
+    camera.TriggerSelector: "FrameStart"   # AcquisitionStart | FrameStart | FrameBurstStart
+    camera.TriggerMode: "Off"              # Off | On
+
+    # --------------------------------------------------------------------------
+    # GigE network bring-up / ForceIP
+    # --------------------------------------------------------------------------
+    # GUI 가 기동 전에 GVCP ForceIP 로 맞춘다 (카메라를 다른 프로그램이 잡고 있으면 건너뛴다).
+    network.force_ip.enable: false
+    network.force_ip.address: "192.168.100.202"
+    network.force_ip.subnet_mask: "255.255.255.0"
+    network.force_ip.gateway: "0.0.0.0"
+    network.force_ip.only_if_link_local: true
+    network.force_ip.wait_after_ms: 1500
+    network.force_ip.rediscovery_timeout_ms: 5000
+
+    # --------------------------------------------------------------------------
+    # PTP + GigE Vision Action Command trigger
+    # --------------------------------------------------------------------------
+    # 랩 리그는 자유 실행이다. 두 카메라를 같은 순간에 찍으려면 flir_camera.yaml 의 설명대로 켠다.
+    ptp.enable: false
+    ptp.mode: "SlaveOnly"
+    ptp.wait_for_sync: true
+    ptp.require_sync: true
+    ptp.sync_timeout_ms: 60000
+    ptp.sync_poll_ms: 250
+    ptp.accepted_statuses: ["Slave"]
+    ptp_action.role: "none"
+    ptp_action.selector: "Action0"
+    ptp_action.trigger_selector: "FrameStart"
+    ptp_action.trigger_source: "Action0"
+    ptp_action.trigger_activation: "RisingEdge"
+    ptp_action.trigger_overlap: "ReadOut"
+    ptp_action.device_key: 1
+    ptp_action.group_key: 1
+    ptp_action.group_mask: 4294967295
+    # PTP 액션으로 찍을 때: 12p 는 20 Hz, 16-bit 는 15 Hz 까지 (§3 #10). 노출은 1/rate 보다 짧아야 한다.
+    ptp_action.rate_hz: 15.0
+    ptp_action.align_to_second: true
+    ptp_action.schedule_ahead_ms: 100.0
+    ptp_action.start_delay_ms: 1000.0
+    ptp_action.request_ack: false
+    ptp_action.expected_ack_count: 0
+    ptp_action.log_interval_sec: 5.0
+
+    # --------------------------------------------------------------------------
+    # Camera-side bandwidth limiting
+    # --------------------------------------------------------------------------
+    # enp5s0 은 MTU 1500 이다. 이보다 큰 패킷은 NIC 가 전부 버려 프레임이 한 장도 완성되지 않는다.
+    # 점보 프레임(MTU 9000)으로 바꾸면 이 값도 9000 으로 같이 바꾼다.
+    camera.GevSCPSPacketSize: 1400
+    # 카메라당 최대 전송률 (bytes/s). 두 카메라가 같은 스위치 → PC 1 GbE 를 쓰는데, 합이 ~72 MB/s 를 넘으면
+    # 스위치에서 패킷이 버려져 LUCID 프레임이 전부 불완전해졌다 (2026-10-19 실측, PC 쪽 드롭 0).
+    # BFS 20 + LUCID 45 = 65 MB/s. BayerRG16 4.61 MB 면 최대 ~4.3 fps. 카메라를 PC 의 다른 NIC 포트에
+    # 따로 꽂으면 각자 1 GbE 를 다 쓴다 (그때 BFS 는 100 MB/s 까지).
+    # GevSCPD(패킷 간 지연)와 같이 주지 않는다 — 서로 다시 계산해 덮어쓴다 (CLAUDE.md).
+    camera.DeviceLinkThroughputLimit: 20000000
+
+    # --------------------------------------------------------------------------
+    # Host stream receiver settings
+    # --------------------------------------------------------------------------
+    stream.StreamBufferCountMode: "Manual"
+    stream.StreamBufferCountManual: 32
+    stream.StreamPacketResendEnable: true
+    stream.StreamPacketResendTimeout: 80

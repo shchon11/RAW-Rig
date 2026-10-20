@@ -1,0 +1,18 @@
+# 랩 RAW 취득 리그 (~/jsh, 2026-10): BFS 한 대. LUCID TRI054S 는 lucid_raw_camera 패키지의 인벤토리에 있다.
+# 두 카메라 모두 enp5s0 (192.168.100.100/24) 에 물려 있고, 원래 IP 가 다른 대역이라 ForceIP(임시)로 맞춘다.
+# lens_model / f_number 는 카메라에서 읽을 수 없어 여기 적고, 노드맵 덤프에 같이 남는다 (§4.3).
+flir_multicam:
+  ros__parameters:
+    cameras:
+      - name: "camera_bfs"
+        serial: "26315393"
+        namespace: "camera_bfs"
+        frame_id: "camera_bfs_optical_frame"
+        hardware_trigger_role: "none"
+        ptp_action_role: "none"
+        force_ip_address: "192.168.100.202"
+        force_ip_subnet_mask: "255.255.255.0"
+        force_ip_gateway: "0.0.0.0"
+        mac_address: "2CDDA3918A81"
+        lens_model: ""
+        f_number: ""

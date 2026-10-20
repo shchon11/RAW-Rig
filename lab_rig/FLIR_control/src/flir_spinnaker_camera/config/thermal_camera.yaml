@@ -1,0 +1,155 @@
+flir_camera:
+  ros__parameters:
+    # --------------------------------------------------------------------------
+    # FLIR A70 (thermal, 640x480, GigE Vision) shared configuration
+    # --------------------------------------------------------------------------
+    # multicam.launch.py applies this to every camera in
+    # config/multicam_thermal_cameras.yaml. Single camera:
+    #   ros2 launch flir_spinnaker_camera flir_camera.launch.py \
+    #     params_file:=<share>/config/thermal_camera.yaml camera_serial:=89905156
+    #
+    # Nodes that differ from the Blackfly (BFS-PGE-27S5C):
+    # - No ExposureTime/Gain/Gamma/BlackLevel/WhiteBalance/DeviceLinkThroughputLimit.
+    # - PixelFormat: only Mono8, Mono16, YUV422_8_UYVY, YCbCr411_8_Planar.
+    # - TriggerSelector only has AcquisitionStart-type entries (no FrameStart), and
+    #   there are no Action* nodes -> no per-frame hardware or PTP action trigger.
+    # - PTP uses the SFNC Ptp* nodes (PtpEnable/PtpStatus), not GevIEEE1588*.
+
+    camera_serial: ""
+    camera_index: 0
+    frame_id: "thermal_camera_optical_frame"
+    acquisition_timeout_ms: 5000
+    publisher_qos_reliability: "reliable"
+    publisher_qos_depth: 20
+    # A70 has no working PTP sync here (see ptp.* below), so its clock is not
+    # related to the host or Blackfly clocks — camera_latched maps it onto the host clock anyway:
+    # it latches the A70's own counter (TimestampLatch, 1 GHz) every few seconds against the host clock.
+    use_camera_timestamp_in_header: false
+    # header.stamp = 이 프레임이 담은 순간 (PC 시계). flir_camera.yaml 의 timestamp.* 설명 참고.
+    # A70 은 외부 트리거로 프레임을 찍을 수 없어 (TriggerSelector 에 FrameStart 가 없다) 자체 주기로 돈다 —
+    # 가시광 트리거와 위상이 맞지 않으니 프레임은 이 stamp 로 짝지어야 한다.
+    timestamp.mode: "camera_latched"
+    # 마이크로볼로미터는 노출이 없다 — ExposureTime 을 빼지 않는다.
+    timestamp.exposure_latch: "start"
+    # 대신 고정 지연을 뺀다: 화소의 열 시정수(보통 수~십수 ms — 프레임은 그만큼 과거의 장면을 지수 가중으로
+    # 담는다) + 카메라 내부 처리(NUC · NoiseReduction · 온도 변환). 카메라가 타임스탬프를 찍는 순간도 문서에 없어
+    # 추측하지 말고 잰다: 뜨거운 물체 앞을 판자로 빠르게 가로질러, 판자 가장자리가 지나가는 시각을 가시광과
+    # 열화상 header.stamp 로 비교한다. 그 차이(ns)를 여기에. 재기 전에는 0 (카메라가 찍은 시각 그대로).
+    timestamp.capture_offset_ns: 0
+    timestamp.trigger_grid_hz: 0.0
+    timestamp.latch_interval_sec: 2.0
+    camera_info.yaml_path: "calibration/flir_camera_info.yaml"
+
+    # Mono16 carries the full 16-bit thermal value; Mono8 is display-scaled only.
+    auto_pixel_format: false
+    pixel_format: "Mono16"
+    # OldestFirst, not NewestOnly (unlike the Blackflies). The A70 captures every
+    # 33.0 ms but sends frames in bunches: measured 2026-09-19, host arrival gaps
+    # ranged 1.9-140 ms (33 of 451 frames within 10 ms of the previous one). With
+    # NewestOnly, whenever two or more frames are waiting when the node asks, all
+    # but the newest are dropped without any warning: 4-7% of frames lost with one
+    # A70 alone, 14-22% with the whole rig running (the node gets to the buffer a
+    # little later). OldestFirst: 0% in both. The node keeps up easily (~10% of a
+    # core), so the queue never grows beyond a bunch; header.stamp is host receive
+    # time either way, so it carries that arrival jitter (the regular capture time is
+    # in image_raw/metadata.camera_timestamp_ns).
+    buffer_handling_mode: "OldestFirst"
+    color_processing: "hq_linear"
+
+    publish_raw: true
+    publish_camera_info: true
+    publish_metadata: true
+    # No colour data on a thermal camera; image_raw (mono16) is the output.
+    publish_rgb_compressed: false
+    rgb_compression_format: "jpeg"
+    rgb_jpeg_quality: 80
+    rgb_png_compression_level: 0
+
+    camera_info.distortion_model: "plumb_bob"
+    camera_info.d: [0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.k: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.r: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.p: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.binning_x: 0
+    camera_info.binning_y: 0
+    camera_info.roi.x_offset: 0
+    camera_info.roi.y_offset: 0
+    camera_info.roi.height: 0
+    camera_info.roi.width: 0
+    camera_info.roi.do_rectify: false
+
+    # --------------------------------------------------------------------------
+    # Thermal image stream
+    # --------------------------------------------------------------------------
+    # Meaning of each Mono16 pixel:
+    #   "Radiometric"            : raw sensor counts (needs Planck R/B/F/O conversion)
+    #   "TemperatureLinear100mK" : Kelvin = value * 0.1
+    #   "TemperatureLinear10mK"  : Kelvin = value * 0.01   (Celsius = value * 0.01 - 273.15)
+    camera.IRFormat: "TemperatureLinear10mK"
+    # Rate60Hz | Rate30Hz | Rate15Hz | Rate7Hz | Rate4Hz
+    camera.IRFrameRate: "Rate30Hz"
+    # Off | Half | Quarter (sensor windowing, increases max frame rate)
+    # camera.IRWindowing: "Off"
+    camera.Width: 640
+    camera.Height: 480
+
+    # Non-uniformity correction. "Automatic" periodically closes the shutter,
+    # which freezes the image for a fraction of a second. "Off" avoids the
+    # freezes but the image drifts over time; trigger manually with NUCAction.
+    camera.NUCMode: "Automatic"
+
+    # Object parameters used for the temperature calculation (SI units, Kelvin).
+    # camera.ObjectEmissivity: 0.95
+    # camera.ObjectDistance: 1.0
+    # camera.ReflectedTemperature: 293.15
+    # camera.AtmosphericTemperature: 293.15
+    # camera.RelativeHumidity: 0.5
+
+    # Free-run. A70 cannot be frame-triggered (no FrameStart).
+    camera.TriggerMode: "Off"
+
+    # --------------------------------------------------------------------------
+    # Trigger / sync roles: not supported on A70
+    # --------------------------------------------------------------------------
+    hardware_trigger.role: "none"
+    ptp_action.role: "none"
+
+    # PTP: the node uses PtpEnable/PtpStatus on this model. In a 2026-09-18 test
+    # with ptp4l as master (UDPv4 and L2), both A70s stayed in 'Listening' and never
+    # reached 'Slave', so PTP is off by default. To try it anyway, set
+    # ptp.enable: true and keep ptp.require_sync: false. A70 has no PtpMode node,
+    # so ptp.mode is left empty.
+    ptp.enable: false
+    ptp.mode: ""
+    ptp.wait_for_sync: true
+    ptp.require_sync: false
+    ptp.sync_timeout_ms: 10000
+    ptp.sync_poll_ms: 250
+    ptp.accepted_statuses: ["Slave"]
+
+    network.force_ip.enable: false
+    network.force_ip.address: ""
+    network.force_ip.subnet_mask: "255.255.255.0"
+    network.force_ip.gateway: "0.0.0.0"
+    network.force_ip.only_if_link_local: true
+    network.force_ip.wait_after_ms: 1500
+    network.force_ip.rediscovery_timeout_ms: 5000
+
+    # --------------------------------------------------------------------------
+    # GigE transport
+    # --------------------------------------------------------------------------
+    # 640x480x2 B x 30 Hz = ~18 MB/s, so no bandwidth limiting is needed.
+    # 1400 even though the camera NIC now runs jumbo frames: the A70 ignores 9000
+    # (packet rate stayed ~13.6k/s in a 2026-09-19 test), and at 18 MB/s it doesn't matter.
+    camera.GevSCPSPacketSize: 1400
+
+    stream.StreamBufferCountMode: "Manual"
+    stream.StreamBufferCountManual: 32
+    stream.StreamPacketResendEnable: true
+    stream.StreamPacketResendTimeout: 200
+    # 프레임 ID · 카메라 타임스탬프 · 노출 시간을 GVSP leader 가 아니라 이미지 payload 안의 chunk data 로 받는다.
+    # leader 패킷만 유실되면 영상은 새 프레임인데 frame_id/타임스탬프는 버퍼 한 바퀴(StreamBufferCountManual,
+    # 32장) 전 값이 남는다 — 리그에서 실제로 나왔다. chunk 는 그 프레임의 픽셀과 같이 와서 틀리지 않는다.
+    # A70 의 chunk 는 Calibration 하나뿐이라 (Timestamp/FrameID 없음) 켜도 쓸 게 없다. leader 가 유실된 프레임은
+    # 노드가 frame info 가 거꾸로 간 것으로 잡아 stamp 를 직전 프레임 + 한 주기로 추정한다.
+    chunk_data.enable: false

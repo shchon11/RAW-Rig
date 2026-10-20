@@ -1,0 +1,55 @@
+build/
+install/
+log/
+.omx/
+bags/
+# ROS bag recordings and storage shards
+bag/
+bags/
+*.bag
+*.db3
+*.db3-shm
+*.db3-wal
+*.mcap
+*.sqlite
+*.sqlite3
+
+# Generated dataset exports
+nuscenes_export/
+
+# Python cache / bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Test / tooling cache
+.pytest_cache/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-specific clutter
+.DS_Store
+
+# Common generated files
+compile_commands.json
+
+# Calibration artifacts
+calibration/captures/
+
+# Camera capture / image dump artifacts
+captures/
+capture/
+captured_images/
+image_dumps/
+
+# Ouster driver metadata dump. ouster_ros writes <sensor-ip>-metadata.json into
+# the *current working directory* when the driver's `metadata` param is empty,
+# so launching from the repo root drops one here. The bag carries the same data
+# on /ouster/metadata, so the loose file is disposable.
+*-metadata.json
+third_party/

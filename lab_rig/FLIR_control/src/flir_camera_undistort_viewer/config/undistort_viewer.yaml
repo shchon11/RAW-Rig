@@ -1,0 +1,15 @@
+flir_camera_undistort_viewer:
+  ros__parameters:
+    input_topic: "/image_rgb/compressed"
+    camera_info_topic: "/camera_info"
+    output_topic: "/image_rgb/undistorted/compressed"
+
+    output_jpeg_quality: 80
+    output_png_compression_level: 3
+
+    input_qos_reliability: "best_effort"
+    input_qos_depth: 10
+    camera_info_qos_reliability: "reliable"
+    camera_info_qos_depth: 20
+    output_qos_reliability: "best_effort"
+    output_qos_depth: 10

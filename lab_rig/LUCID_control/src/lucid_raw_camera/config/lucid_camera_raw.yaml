@@ -1,0 +1,209 @@
+lucid_camera:
+  ros__parameters:
+    # ==========================================================================
+    # LUCID TRI054S-C (Sony IMX490) RAW 연구 취득 프로파일
+    #
+    # FLIR_control 의 config/flir_camera_raw.yaml 과 같은 원칙이다: image_raw 와 image_raw/metadata 가
+    # 정답 데이터이고, 카메라 안의 처리(WB, 색변환, LUT, HDR 보정 · 클램프)는 전부 끈다.
+    # IMX490 PTC 측정(~/jsh/imx490_ptc, 2026-10-19)과 같은 설정이어야 그 노이즈 파라미터를 쓸 수 있다:
+    # BayerRG24, Gain 0 dB, BlackLevelRaw 256, ISP off.
+    #
+    # 랩 리그: BFS 26315393 과 enp5s0(MTU 1500) 1 GbE 하나를 같이 쓴다. 링크 제한 합이 ~110 MB/s 를 넘지 않게.
+    # ==========================================================================
+
+    # --------------------------------------------------------------------------
+    # Base node configuration
+    # --------------------------------------------------------------------------
+    # 런치가 인벤토리의 serial 로 덮어쓴다.
+    camera_serial: ""
+    camera_index: 0
+    frame_id: "lucid_camera_optical_frame"
+    # 저조도에서는 노출이 수백 ms ~ 수 초가 된다. 프레임 간격보다 넉넉히 크게.
+    acquisition_timeout_ms: 10000
+    device_discovery_timeout_ms: 2000
+    publisher_qos_reliability: "reliable"   # reliable | best_effort
+    # image_raw 한 장이 16~21 MB 라 깊이를 작게 둔다 (밀린 구독자만큼 발행 쪽 메모리가 찬다).
+    publisher_qos_depth: 5
+    # header.stamp 의 기준.
+    #   camera_latched : 카메라 시계를 TimestampLatch 로 주기적으로 host 시계에 맞춰 옮긴다 (프레임 시각, ms 미만 오차)
+    #   host           : 프레임이 PC 에 도착한 시각 (16 MB 전송만큼 늦다)
+    timestamp.mode: "camera_latched"
+    # 카메라 타임스탬프가 노출 시작(start)인지 끝(end)인지. TRI054S 는 아직 실측 전이다.
+    timestamp.exposure_latch: "start"
+    timestamp.latch_interval_sec: 2.0
+    # 수신 상태 요약 로그 주기 (s)
+    stream_stats.interval_sec: 30.0
+    # 프레임별 값은 그 프레임의 chunk 에서 읽는다. chunk 를 켰는데 못 읽은 프레임은 metadata 의
+    # chunk_valid=false, 값은 NaN. 설정을 바꾼 직후 두 프레임은 metadata.settled=false 로 표시된다
+    # (PTC 스크립트에서는 chunk 노출값이 영상보다 한 프레임 먼저 바뀐 적이 있다. 이 노드의 R3 시험
+    # 2026-10-19 에서는 같은 프레임에서 바뀌었다).
+    chunk_data.enable: true
+    # CRC · Timestamp · ExposureTime · Gain · BlackLevel · PixelFormat
+    chunk_data.selectors: ["CRC", "Timestamp", "ExposureTime", "Gain", "BlackLevel", "PixelFormat"]
+
+    # --------------------------------------------------------------------------
+    # Pixel format / output
+    # --------------------------------------------------------------------------
+    # BayerRG24 : HDR 합성(24-bit)과 채널 출력(12-bit 코드 + 페데스탈) 모두 그대로 담는다. 16.1 MB/프레임 (PTC 측정 포맷)
+    # BayerRG16 : 10.7 MB/프레임. 채널 출력은 min(24-bit 값, 4095) << 4 — 포화 근처 256 코드가 잘린다 (2026-10-19 실측)
+    # BayerRG12p: 8.0 MB/프레임. 채널 출력은 min(24-bit 값, 4095) — raw12p_shift 0 이면 BayerRG24 와 같은 단위,
+    #             위쪽 256 코드는 같이 잘린다. 대역폭이 절반이라 프레임레이트를 두 배로 쓸 수 있다
+    # BayerRG8  : RAW 정보가 잘린다. 쓰지 않는다.
+    pixel_format: "BayerRG24"
+    # BayerRG24 를 image_raw 에 담는 방법.
+    #   uint32 : 픽셀당 32-bit (encoding 32SC1, 값 < 2^24). cv_bridge 로 바로 읽힌다. 21.4 MB/프레임
+    #   packed : 카메라가 보낸 3바이트 그대로 (encoding bayer_rggb24, 비표준). 16.1 MB/프레임
+    raw24_container: "uint32"
+    # BayerRG12p 를 16-bit 로 풀 때 왼쪽 시프트 (0 = 0..4095 그대로 = BayerRG24 와 같은 단위, 4 = BayerRG16 처럼 << 4)
+    raw12p_shift: 0
+    buffer_handling_mode: "OldestFirst"
+    # Arena 수신 버퍼 수 (한 장 16~21 MB)
+    stream_buffer_count: 10
+
+    # --------------------------------------------------------------------------
+    # Topic output
+    # --------------------------------------------------------------------------
+    publish_raw: true
+    publish_camera_info: true
+    publish_metadata: true
+    publish_rgb_compressed: true
+    # preview: RAW 를 디모자이크 · 블랙 제거 · 자동 밝기 · 감마로 그린 GUI 미리보기 (연구용 RGB 아님)
+    rgb_compressed_mode: "preview"
+    # 초당 최대 장수 (0 = 매 프레임)
+    preview.max_rate_hz: 3.0
+    # 1 = 2x2 셀당 1픽셀 (1440x930), 2 = 그 절반 (720x465)
+    preview.downscale: 2
+    # 0 = 자동 (G 평균이 target_mean 이 되게)
+    preview.gain: 0.0
+    preview.target_mean: 0.18
+    # 자동 게인 상한 (풀스케일 대비 배수). HDR 24-bit 는 풀스케일이 커서 크게 둔다.
+    preview.max_gain: 1000000.0
+    # 자동 게인을 dark 노이즈(σ)가 표시 범위의 이 비율을 넘지 않게도 묶는다 (0 = 끔)
+    preview.noise_ceiling: 0.02
+    preview.gamma: 2.2
+    # gray_world | none
+    preview.white_balance: "gray_world"
+    # 음수 = 자동 (G 의 하위 0.5%)
+    preview.black_level_dn: -1.0
+    preview.jpeg_quality: 80
+
+    # --------------------------------------------------------------------------
+    # RAW 메타데이터 · 노드맵 덤프
+    # --------------------------------------------------------------------------
+    # 블랙 레벨 (DN, BlackLevelSelector=All 의 BlackLevelRaw). 0 이면 dark 의 47~97% 가 0 으로 잘린다 (dark_probe).
+    # 64 에서도 ch2 에 0 이 남아 256 을 쓴다. 음수 = 카메라 값 그대로.
+    raw.black_level_raw: 256
+    # WB 비율 (BalanceWhiteEnable=false 면 쓰이지 않지만 같이 1.0 으로 둔다)
+    raw.balance_ratio_red: 1.0
+    raw.balance_ratio_green: 1.0
+    raw.balance_ratio_blue: 1.0
+    # 이 출력의 포화 코드값 (image_raw 단위). -1 = 자동, 0 = 모름, 값 = 그 값.
+    # 자동은 2026-10-19 실측 클립점: 채널 출력(HDRChannelN)은 BayerRG24 에서 12-bit 코드 + 페데스탈
+    # (BlackLevelRaw 256 이면 최대 4351), BayerRG16 은 min(그 값, 4095) << 4 (최대 65520), BayerRG12p 는
+    # min(그 값, 4095) << raw12p_shift. HDR 합성은 아직 못 재서 0 이다.
+    raw.white_level_dn: -1
+    # 설정 직후 · 실행 중 설정을 바꾼 2초 뒤 노드맵 전체를 JSON 으로 남긴다.
+    nodemap_dump_dir: "/mnt/data/jsh_raw/nodemap"
+    # DeviceTemperature 를 읽는 주기 (s)
+    temperature.interval_sec: 1.0
+
+    # --------------------------------------------------------------------------
+    # Acquisition / FPS
+    # --------------------------------------------------------------------------
+    # TRI054S 는 노출 시간 상한이 프레임 주기에 묶이고, 프레임레이트는 스트리밍 중에 못 바꾼다.
+    # exposure.auto_frame_rate 를 켜면 노출 시간에 맞춰 노드가 프레임레이트를 내리고 올린다 (스트림을
+    # 잠깐 멈췄다 다시 시작). 그때 camera.AcquisitionFrameRate 는 상한이다. 끄면 노출은 1/fps 를 못 넘는다.
+    # 링크 제한 45 MB/s 에서 카메라는 10% (DeviceLinkThroughputReserve) 를 재전송용으로 남겨 40.5 MB/s 로
+    # 보낸다. BayerRG24 한 장은 헤더까지 16.5 MB 라 2.5 Hz 면 모자라 프레임이 잘렸다 (2026-10-19) → 2.0 Hz.
+    camera.AcquisitionFrameRateEnable: true
+    camera.AcquisitionFrameRate: 2.0
+    exposure.auto_frame_rate: true
+    # 프레임 주기 = 노출 + 이 여유 (µs)
+    exposure.frame_rate_margin_us: 500.0
+    # HDROutput · PixelFormat · AcquisitionFrameRate 처럼 스트리밍 중 잠기는 노드를 실행 중에 바꾸면
+    # 스트림을 멈췄다 적용하고 다시 시작한다 (~0.5 초 프레임 없음). false 면 거부한다.
+    live.restart_stream_for_locked: true
+
+    # --------------------------------------------------------------------------
+    # Exposure
+    # --------------------------------------------------------------------------
+    # Off | Once | Continuous
+    camera.ExposureAuto: "Off"
+    # Exposure time, in microseconds.
+    camera.ExposureTime: 20000.0
+
+    # --------------------------------------------------------------------------
+    # Gain
+    # --------------------------------------------------------------------------
+    # Off | Once | Continuous
+    camera.GainAuto: "Off"
+    # Gain in dB. 0 dB = PTC 측정 조건. 바꾸면 그 게인으로 PTC 를 다시 잰다.
+    camera.Gain: 0.0
+
+    # --------------------------------------------------------------------------
+    # HDR (IMX490)
+    # --------------------------------------------------------------------------
+    # HDR = 네 채널 합성 (24-bit). HDRChannel0~3 = 한 채널만 (PTC: ch0 SP1 HCG α≈9.6 DN/e⁻ · read 0.53 e⁻,
+    # ch1 SP1 LCG 0.45 · 2.5 e⁻, ch2 SP2 0.97 · 13.5 e⁻, ch3 SP2 다른 게인). HDR | HDRChannel0 | HDRChannel1 | HDRChannel2 | HDRChannel3
+    camera.HDROutput: "HDR"
+    # 합성 출력에 거는 보정 · 클램프 — RAW 에서는 끈다.
+    camera.HDRImageEnhancementEnable: false
+    camera.HDRDigitalClampingEnable: false
+
+    # --------------------------------------------------------------------------
+    # ISP off — RAW 에 아무 처리도 구워지지 않게
+    # --------------------------------------------------------------------------
+    # Off | Once | Continuous
+    camera.BalanceWhiteAuto: "Off"
+    camera.BalanceWhiteEnable: false
+    camera.ColorTransformationEnable: false
+    camera.LUTEnable: false
+    camera.ReverseX: false
+    camera.ReverseY: false
+
+    # --------------------------------------------------------------------------
+    # ROI / resolution
+    # --------------------------------------------------------------------------
+    camera.Width: 2880
+    camera.Height: 1860
+
+    # --------------------------------------------------------------------------
+    # Trigger
+    # --------------------------------------------------------------------------
+    camera.TriggerMode: "Off"              # Off | On
+
+    # --------------------------------------------------------------------------
+    # Network / bandwidth
+    # --------------------------------------------------------------------------
+    # 64-bit 프레임 번호 (16-bit 면 65535 장마다 되돌아가서 진단이 유실로 센다). Off | On
+    camera.GevGVSPExtendedIDMode: "On"
+    # 카메라당 최대 전송률. 두 카메라가 같은 스위치 → PC 1 GbE 를 쓰는데, 2026-10-19 실측으로 합이
+    # ~72 MB/s 를 넘으면 스위치에서 패킷이 버려져 LUCID 프레임(패킷 1만 개)이 전부 불완전해졌다
+    # (PC 쪽 NIC · 소켓 드롭 0). 그래서 BFS 20 + LUCID 45 = 65 MB/s. 더 빠르게 찍으려면 카메라를
+    # PC 의 다른 NIC 포트에 따로 꽂는다 (각자 1 GbE).
+    # BayerRG24 16.1 MB → ~2 fps, 12p 8.0 MB → ~4.5 fps. Off | On
+    camera.DeviceLinkThroughputLimitMode: "On"
+    camera.DeviceLinkThroughputLimit: 45000000
+    # 패킷 크기는 NIC MTU(1500)에 맞춰 자동으로 협상한다.
+    stream.StreamAutoNegotiatePacketSize: true
+    stream.StreamPacketResendEnable: true
+    # 한 장에 패킷이 1만 개라 재전송 요청 기본값(5)으로는 몇 개만 빠져도 불완전 프레임이 된다.
+    stream.StreamMaxNumResendRequestsPerImage: 200
+
+    # --------------------------------------------------------------------------
+    # CameraInfo
+    # --------------------------------------------------------------------------
+    camera_info.distortion_model: "plumb_bob"
+    camera_info.d: [0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.k: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.r: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    camera_info.p: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # --------------------------------------------------------------------------
+    # GigE network bring-up / ForceIP
+    # --------------------------------------------------------------------------
+    # GUI 가 기동 전에 GVCP ForceIP 로 맞춘다. 노드가 직접 하려면 켠다 (런치는 끈다).
+    network.force_ip.enable: false
+    network.force_ip.address: "192.168.100.201"
+    network.force_ip.subnet_mask: "255.255.255.0"
+    network.force_ip.gateway: "0.0.0.0"

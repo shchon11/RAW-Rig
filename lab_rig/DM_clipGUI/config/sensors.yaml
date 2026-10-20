@@ -1,0 +1,851 @@
+# sensors.yaml — 센서군 레지스트리 (랩 RAW 취득 리그, ~/jsh — 원본 ~/DM/DM_clipGUI 에서 갈라짐).
+#
+# 랩 리그 (2026-10): FLIR Blackfly S BFS-PGE-23S3C (26315393) + LUCID TRI054S-C (254600231, Sony IMX490).
+# 둘 다 enp5s0 (192.168.100.100/24, MTU 1500) 의 같은 스위치에 물려 1 GbE 하나를 나눠 쓴다.
+# 원본의 열화상 A70 · Ouster · GNSS 그룹은 뺐다. 랩에서 더한 키:
+#   node_name     : 카메라 노드 이름 (ISP 튜닝이 /<ns>/<node_name>/set_parameters 를 부른다). 기본 flir_camera
+#   forced_params : 원본 params 위에 GUI 설정보다 나중에 덮어쓰는 값 — 리포 원본을 안 바꾸고 이 PC 에만 맞는 값
+#   checks.link_reserve_pct : 링크 제한 중 카메라가 재전송용으로 남기는 % (LUCID DeviceLinkThroughputReserve)
+#   checks.shared_link      : {name, MBps, why} — 같은 name 의 센서군 링크 제한 합이 MBps 를 넘으면 경고
+#   tuning.live_prefixes    : ISP 튜닝에 camera.* 말고도 올릴 키 접두 (raw. · preview. — 노드가 실행 중에 받는다)
+#   tuning.node_restarts_stream : 스트리밍 중 잠기는 노드를 노드가 스트림을 멈췄다 적용한다 (튜닝 탭에서 안 잠금)
+#
+# GUI의 "센서 기동" 탭이 읽는 유일한 소스. 센서를 추가/교체하면 코드가 아니라 이 파일을 고친다.
+#
+# 각 센서군(group)은 세 가지를 선언한다:
+#   discovery : 그 센서를 네트워크에서 어떻게 찾는가
+#   launch    : 어떤 워크스페이스를 소싱해 어떤 런치를 띄우는가
+#   fields    : 설정 탭 맨 위 '주요 설정' 에 한국어 이름으로 올릴 키 (원본 params YAML의 키 또는 런치 인자)
+#
+# 설정 탭의 '전체 설정' 은 여기 적지 않아도 원본 params YAML 의 모든 키(주석 처리된 키 포함)와
+# 런치 파일의 모든 인자를 파일에서 직접 읽어 보여준다 (scripts/param_doc.py). 그래서 fields 에는
+# "자주 바꾸고, 잘못 바꾸면 위험해서 설명이 필요한 것" 만 올린다.
+#   managed_params / managed_launch_args : 런치나 GUI 가 따로 정해서 '전체 설정' 에서 바꿔 봐야
+#     소용없는 키 — 읽기 전용으로 보여주고 이유를 단다. "network.force_ip.*" 처럼 * 를 쓸 수 있다.
+#   panel   : 기능군 상자 (그룹의 panels: 에 제목 · 설명) — 카메라 제어 / ISP / PC 처리 · 출력.
+#   section : 상자 안의 소제목
+#   조건 두 가지 — {키: 값, …} 는 AND, 값이 목록이면 그중 하나, [{…}, {…}] 처럼 목록으로 주면 OR:
+#     enabled_when  : 안 맞으면 칸 전체가 회색이 되고 생성 파일에서도 빠진다. 카메라가 거부해 노드가 죽거나
+#                     (노출 auto 인데 노출 시간) 짝 설정 없이 쓰면 결과가 불확실한 칸에만 쓴다.
+#     relevant_when : 안 맞으면 이름만 흐려진다. 편집할 수 있고 값은 그대로 파일에 실린다 — 지금 설정에서는
+#                     효과가 없을 뿐 해는 없는 칸 (JPEG 을 안 낼 때의 JPEG 품질).
+#   writes   : 노드 파라미터(camera.* 가 아닌 키)가 노드 로직으로 쓰는 GenICam 노드 — 줄의 '노드→GenICam' 태그.
+#              노드는 camera.* 를 적용한 뒤에 이걸 쓰므로, 같은 노드의 camera.* 키는 managed_params 로 잠근다.
+#   alias_of : camera.* 키가 공개 노드가 아니라 그 레지스터 별칭일 때 원래 노드 이름 (Gamma_FloatVal → Gamma).
+#   live_alias : ISP 튜닝에서 실행 중에 넣을 때 이 키가 등록돼 있지 않으면 대신 쓸 별칭 (ExposureTime → ExposureTime_FloatVal).
+#   scale / file_type : 파일 값 = 폼 값 × scale. file_type: int 면 정수로 반올림 (정수 레지스터 별칭).
+#   placeholder : 문자열 칸이 비었을 때 흐리게 보일 글 — 비우면 어떻게 되는지 (예: '자동').
+# subset 의 genicam: {xml, categories} — '전체 설정' 에 카메라 GenICam XML 의 노드를 카테고리별로 올린다.
+# subset 의 checks: {sensor, uplink_MBps} — 엮인 설정끼리의 문제를 기동 전에 찾는다 (sensor_config.check_settings).
+#
+# 원본 params YAML은 절대 수정하지 않는다. 폼에서 바꾼 키만 덮어쓴 사본을
+# ~/.config/dm_clip_gui_raw/sensors/<group>.yaml 로 생성해 런치에 넘긴다.
+#
+# 경로의 ~ 는 확장된다. 존재하지 않는 워크스페이스/파일은 GUI가 그 센서군을 "설정 없음"으로
+# 표시하고 기동 버튼을 잠근다 (죽지 않는다).
+
+groups:
+
+  # ---------------------------------------------------------------------------
+  # FLIR Blackfly S — RAW 프로파일 (~/jsh/FLIR_control, 브랜치 feat/raw-capture)
+  # docs/raw_capture_noise_calibration.md 의 RAW 취득 설정. image_raw (BayerRG16) + image_raw/metadata
+  # (FlirMetadata: chunk 값 · 세션 설정 · 온도) 가 정답 데이터이고, image_rgb/compressed 는 미리보기다.
+  # ---------------------------------------------------------------------------
+  - key: flir_cameras
+    label: "FLIR 카메라"
+    node_name: flir_camera
+    workspaces:
+      - "~/jsh/FLIR_control/scripts/setup_flir_env.bash"
+      - "~/jsh/FLIR_control/install/setup.bash"
+    launch_package: flir_spinnaker_camera
+    launch_file: multicam.launch.py
+    # camera_info.yaml_path 는 리포 루트 기준 상대 경로라 CWD 가 리포 루트여야 한다.
+    workdir: "~/jsh/FLIR_control"
+    # 사본 인벤토리를 넘길 때 런치의 자동 갱신 · 열화상은 끈다. 랩에는 PTP 도 extrinsics 도 없다.
+    inventory_launch_args:
+      auto_update_cameras_file: false
+      auto_update_thermal_cameras_file: false
+      enable_thermal_cameras: false
+    ready_log: "Camera acquisition started"
+    issue_logs:
+      - match: "startup camera override(s) NOT applied"
+        text: "설정 일부가 카메라에 안 들어감"
+      # 노드가 기동 설정을 다 마친 뒤 설정 파일의 camera.* 값을 카메라에서 다시 읽어 비교한다. 다르면 한 번 다시
+      # 쓰고(WARN 'Re-applied …'), 그래도 다르면 이 줄을 ERROR 로 찍는다 — 짝 레지스터가 서로 덮어쓰거나(GevSCPD ↔
+      # 링크 대역폭 제한, 2026-09-22) 카메라가 거부한 값. 자세한 키와 값은 런치 로그에.
+      - match: "not in effect after startup"
+        text: "설정 일부가 카메라에 안 남음 — 다른 설정이 덮어썼거나 카메라가 거부 (런치 로그)"
+      # 카메라 연결이 끊겨(케이블 · PoE · 카메라 재부팅) 스트림이 중단되면 노드는 영상 받기를 멈추고 살아만 있다 —
+      # 그 뒤로는 타임아웃 경고도 안 찍혀 행이 초록으로 남았다 (2026-09-22 06:34 camera_front2: 레지스터 쓰기 -1010 →
+      # 'Stream has been aborted' → 이후 9분 동안 0장). 재기동 전까지 풀리지 않는다 (recurring 아님).
+      - match: "Stopping acquisition after fatal Spinnaker stream error"
+        text: "카메라 연결 끊김 — 영상 받기를 멈춤 (케이블 · PoE 확인 후 재기동)"
+      # 노드가 프레임을 acquisition_timeout_ms(3초) 기다려도 안 오면 찍는다. HW 트리거 카메라가 펄스를 못 받으면
+      # 'Camera acquisition started' 는 찍혀서 실행 중(초록)으로 보이는데 프레임은 0장이다 (2026-09-22: HW 트리거로
+      # 바꾼 뒤 가시광 전부 0 Hz, 열화상만 30 Hz). 이 줄이 10초 넘게 멈추면 풀린 것으로 본다.
+      - match: "NEW_BUFFER_DATA"
+        text: "프레임이 안 옴 — HW 트리거면 트리거 펄스가 안 들어오는 것 (배선 · 발생기 · 입력 라인 · 엣지)"
+        recurring: true
+      # RAW 프로파일의 raw.* (selector 노드) 가 안 들어갔을 때도 같은 ERROR 문구를 쓴다 (위 'not in effect').
+    managed_params:
+      camera_serial: "런치가 인벤토리의 serial 로 카메라마다 덮어씁니다"
+      camera_index: "camera_serial 이 있으면 쓰이지 않습니다 (런치가 serial 을 줍니다)"
+      frame_id: "런치가 카메라마다 <이름>_optical_frame 으로 덮어씁니다"
+      camera_info.yaml_path: "런치 인자 camera_info_yaml_path 가 덮어씁니다"
+      profile_path: "런치가 params 파일 경로를 넣습니다 (노드맵 덤프에 남는다)"
+      "lens.*": "카메라마다 다르다 — 인벤토리(lab_raw_cameras.yaml)의 lens_model · f_number 로 정합니다"
+      hardware_trigger.role: "카메라별 역할 — '감지된 장비' 표의 동기 방식 칸에서 정합니다"
+      ptp_action.role: "카메라별 역할 — '감지된 장비' 표의 동기 방식 칸에서 정합니다"
+      "network.force_ip.*": "IP 는 GUI 가 기동 전에 맞춥니다 ([IP 할당] / IP 자동 맞춤)"
+    managed_launch_args:
+      "auto_update_*": "GUI 가 감지 결과로 인벤토리 사본을 만들어 넘기므로 쓰지 않습니다"
+      enable_thermal_cameras: "랩 리그에는 열화상이 없습니다"
+      "thermal_*": "랩 리그에는 열화상이 없습니다"
+      "auto_*force_ip*": "IP 는 GUI 가 기동 전에 한 대씩 맞춥니다 ([IP 할당] / IP 자동 맞춤)"
+      force_ip_in_camera_nodes: "IP 는 GUI 가 기동 전에 한 대씩 맞춥니다 — 노드들이 동시에 ForceIP 하면 서로 덮어씁니다"
+    subsets:
+      - key: visible
+        label: "FLIR Blackfly S"
+        short_label: "BFS"
+        model_patterns: ["Blackfly"]
+        enable_arg: enable_visible_cameras
+        inventory: "~/jsh/FLIR_control/src/flir_spinnaker_camera/config/lab_raw_cameras.yaml"
+        inventory_arg: cameras_file
+        name_prefix: camera
+        force_ip_base: "192.168.100.202"
+        # 랩은 자유 실행 (동기 역할 없음). 동기 역할을 켜면 인벤토리에 없는 카메라가 HW 트리거 slave 로 떠 0장이 된다.
+        sync_roles: false
+        params: "~/jsh/FLIR_control/src/flir_spinnaker_camera/config/flir_camera_raw.yaml"
+        params_arg: params_file
+        topic_regex: "^/camera[a-z0-9_]*/"
+        # 원본 프로파일은 차량과 같은 bags/nodemap 이다 (bags → 차량 디스크). 이 PC 에서는 데이터 디스크로.
+        forced_params:
+          nodemap_dump_dir: "/mnt/data/jsh_raw/nodemap"
+        checks:
+          sensor: [1920, 1200]
+          uplink_MBps: 70
+          shared_link:
+            name: "enp5s0 (랩 스위치 → PC 1 GbE)"
+            MBps: 70
+            why: >-
+              2026-10-19 실측: 합이 ~72 MB/s 를 넘으면 스위치에서 패킷이 버려져 LUCID 프레임(패킷 ~1.1만 개)이 전부
+              불완전해졌다 (PC 쪽 NIC · 소켓 드롭 0). 카메라를 PC 의 다른 NIC 포트에 따로 꽂으면 각자 1 GbE 를 쓴다.
+        tuning:
+          panels: [isp]
+          sections: ["노출 · 게인", "미리보기"]
+          live_prefixes: ["raw.", "preview."]
+        genicam:
+          xml: "~/.config/spinnaker/xml/BFS-PGE-23S3C_*_GENICAM.zip"
+          categories: [AnalogControl, ColorTransformationControl, LUTControl, AutoAlgorithmControl,
+                       DefectivePixelCorrection]
+          # 값 조건까지 확실한 종속 (GenICam 칸의 enabled_when / relevant_when). 어느 노드가 잠김에 관여하는지는
+          # XML 에서 자동으로 뽑아 툴팁에 보이지만(genicam_doc.dependencies), 켜야 풀리는지 꺼야 풀리는지는 XML 에
+          # 없어서 여기 적는다. 근거는 XML ToolTip, 그리고 2026-09-21 공장값 상태로 떠 있던 노드에 그 파라미터가
+          # 등록됐는지(= 그 상태에서 쓸 수 있었는지). 조건 값의 null 은 '지정 안 함'(카메라에 남은 값)도 허용한다는
+          # 뜻 — 공장값이 조건을 만족할 때만 넣는다. 2026-09-21 GUI 가 만든 파일에 조명 모드 AutoDetect 와 측광
+          # 모드 Average 가 같이 들어 있었다 — 측광 모드는 Normal 에서만 쓸 수 있다.
+          rules:
+            AutoExposureMeteringMode:
+              enabled_when: {"camera.AutoExposureLightingMode": ["Normal", null]}
+              why: "측광 모드는 조명 모드가 Normal 일 때만 쓸 수 있습니다 (ToolTip) — 다른 조명 모드에서 쓰면 카메라가 거부합니다."
+            AutoExposureTargetGreyValue:
+              enabled_when: {"camera.AutoExposureTargetGreyValueAuto": "Off"}
+              why: "목표 밝기를 직접 줄 때만 씁니다 — 목표 밝기 auto 가 Continuous(공장값)면 잠겨 있습니다."
+            AutoExposureLightingMode:
+              enabled_when: {"camera.AutoExposureTargetGreyValueAuto": ["Continuous", null]}
+              why: "목표 밝기 auto 가 Continuous(공장값)일 때 쓸 수 있었습니다 (2026-09-21 확인)."
+            AutoExposureEVCompensation:
+              enabled_when: {"camera.AutoExposureTargetGreyValueAuto": ["Continuous", null]}
+              why: "목표 밝기 auto 가 Continuous(공장값)일 때 쓸 수 있었습니다 (2026-09-21 확인). 목표 밝기를 직접 주면 그 값이 대신합니다."
+            AutoExposureControlPriority:
+              enabled_when: {"camera.ExposureAuto": "Continuous", "camera.GainAuto": "Continuous"}
+              why: "노출과 게인이 둘 다 auto 일 때만 의미가 있습니다 (무엇부터 올릴지). 노출 auto Once · 게인 Off 이던 리그에서는 잠겨 있었습니다."
+            BalanceWhiteAutoDamping:
+              enabled_when: {"camera.BalanceWhiteAuto": ["Once", "Continuous", null]}
+              why: "WB auto 가 꺼져 있으면 잠깁니다 (XML: BalanceWhiteAuto 에 따라 잠김)."
+            BalanceWhiteAutoLowerLimit:
+              relevant_when: {"camera.BalanceWhiteAuto": ["Once", "Continuous", null]}
+            BalanceWhiteAutoUpperLimit:
+              relevant_when: {"camera.BalanceWhiteAuto": ["Once", "Continuous", null]}
+            SharpeningThreshold:
+              enabled_when: {"pixel_format": ["RGB8Packed", "BGR8"], "camera.SharpeningEnable": true, "camera.SharpeningAuto": false}
+              why: "샤프닝을 켜고 auto 를 끈 RGB 출력에서만 씁니다."
+            AasRoiOffsetX:
+              relevant_when: {"camera.AasRoiEnable": true}
+            AasRoiOffsetY:
+              relevant_when: {"camera.AasRoiEnable": true}
+            AasRoiWidth:
+              relevant_when: {"camera.AasRoiEnable": true}
+            AasRoiHeight:
+              relevant_when: {"camera.AasRoiEnable": true}
+        managed_params:
+          # 주요 설정 ISP 가 같은 레지스터를 별칭 키로 쓴다 — 두 칸에서 따로 쓰면 이름순으로 나중 것이 이긴다.
+          camera.Gamma: "주요 설정 ISP 의 '감마 값'(camera.Gamma_FloatVal)과 같은 레지스터입니다 — 거기서 정합니다"
+          camera.Saturation: "주요 설정 ISP 의 '채도'(camera.Saturation_FloatVal)와 같은 레지스터입니다 — 거기서 정합니다"
+          camera.Sharpening: "주요 설정 ISP 의 '샤프닝 양'(camera.SharpMult_FloatVal)과 같은 레지스터입니다 — 거기서 정합니다"
+          camera.Gain: "주요 설정의 '게인'(camera.GainDB_Val)과 같은 레지스터입니다 — 거기서 정합니다 (게인 auto 검사도 거기서)"
+          camera.BlackLevelRaw: "주요 설정 ISP 의 '블랙 레벨'(%)과 같은 값의 다른 단위입니다 — 거기서 정합니다"
+          # 패킷 간 지연과 링크 대역폭 제한은 같은 것을 두 방식으로 적는 짝이다 — 카메라는 하나를 쓰면 다른 하나를
+          # 다시 계산한다. 원본 YAML 의 GevSCPD: 0 이 75 MB/s 제한 뒤에 들어가 14대 중 13대가 125 MB/s 로 되돌아갔고,
+          # 동시 트리거에서 스위치가 패킷을 버려 센서가 들어왔다 말았다 했다 (2026-09-22). 생성 파일에서도 뺀다.
+          camera.GevSCPD: "패킷 간 지연은 '카메라당 링크 대역폭'(DeviceLinkThroughputLimit)이 정합니다 — 둘은 카메라 안에서 같은 값의 짝이라, 따로 쓰면 대역폭 제한이 풀립니다"
+          # 패턴(*)을 쓰지 않는다 — camera.BalanceRatio* 는 주요 설정의 BalanceRatioRed_Val 까지 잠가 파일에서 뺀다.
+          camera.BalanceRatio: "WB 비율은 주요 설정 ISP 에서 R · B 따로 정합니다 — 이 노드는 선택자로 고른 한 채널뿐입니다"
+          camera.BalanceRatio_FloatVal: "WB 비율은 주요 설정 ISP 에서 R · B 따로 정합니다 — 이 노드는 선택자로 고른 한 채널뿐입니다"
+          camera.BalanceRatioSelector: "WB 비율은 주요 설정 ISP 에서 R · B 따로 정해서 선택자가 필요 없습니다"
+          camera.LUTIndex: "LUT 는 인덱스로 고르는 표라 파라미터 파일로는 한 칸밖에 못 씁니다 — 표 편집은 SpinView 로"
+          camera.LUTValue: "LUT 는 인덱스로 고르는 표라 파라미터 파일로는 한 칸밖에 못 씁니다 — 표 편집은 SpinView 로"
+          "camera.DefectTable*": "결함 화소 표는 인덱스로 고르는 표라 파라미터 파일로는 못 씁니다 — SpinView 로"
+          camera.ColorTransformationSelector: "CCM 은 RGBtoRGB 기준으로 ISP 의 '색 보정 행렬' 칸에서 정합니다"
+          camera.ColorTransformationValueSelector: "행렬 칸은 선택자로 하나씩 고르는 구조라 파라미터 파일로 못 씁니다 — ISP 의 CCM 광원 프리셋으로"
+          camera.ColorTransformationValue: "행렬 칸은 선택자로 하나씩 고르는 구조라 파라미터 파일로 못 씁니다 — ISP 의 CCM 광원 프리셋으로"
+          # 노드가 자기 로직으로 쓰는 GenICam 노드. 노드는 camera.* 를 먼저 적용하고 그 뒤에 동기 설정을 쓰므로
+          # (ApplyPtp → ApplyHardwareTrigger → ApplyPtpAction) 여기서 바꿔 봐야 덮어써진다. 원본 YAML 에 적힌
+          # 값(camera.TriggerMode: "Off")은 그대로 실린다 — 동기 역할이 없는 카메라는 그 값으로 자유 실행한다.
+          "camera.Trigger*": "트리거는 카메라별 동기 방식('감지된 장비' 표)과 카메라 제어의 트리거 칸이 정합니다 — 노드가 camera.* 뒤에 다시 씁니다"
+          "camera.Line*": "GPIO 라인은 노드의 hardware_trigger.* 가 정합니다 — LineSelector 로 고르는 구조라 여기서 쓰면 어느 라인에 걸릴지도 모릅니다"
+          camera.V3_3Enable: "노드의 hardware_trigger.master.* (3.3 V 출력)가 정합니다"
+          "camera.UserOutput*": "노드의 hardware_trigger.* 가 정합니다"
+          "camera.GevIEEE1588*": "PTP 는 카메라 제어의 'PTP 시각 동기'(ptp.enable)와 동기 방식이 정합니다"
+          "camera.Ptp*": "PTP 는 카메라 제어의 'PTP 시각 동기'(ptp.enable)와 동기 방식이 정합니다"
+          "camera.Action*": "PTP 액션 트리거는 노드의 ptp_action.* 가 정합니다"
+    discovery:
+      kind: gvcp
+      nics: [enp5s0]
+
+    panels:
+      camera:
+        title: "카메라 제어"
+        hint: >-
+          무엇을 · 얼마나 밝게 찍을지 (포맷 · 프레임레이트 · 노출 · 네트워크). 줄 오른쪽 태그는 값이 카메라에 닿는 경로다 —
+          GenICam: 노드가 그 GenICam 노드에 그대로 쓴다. 노드→GenICam: 노드가 자기 로직으로 쓴다. PC: 카메라에 가지 않는다.
+      isp:
+        title: "RAW — 카메라 안의 처리 끄기"
+        hint: >-
+          노이즈 캘리브레이션(26315393 기준값, 명세 §2)과 같은 조건: 0 dB, ADC 12-bit, 블랙 클램프 끔, BlackLevel 1 %,
+          WB Off · 비율 1.0, 감마 · LUT · 결함 화소 보정 끔. raw.* 는 selector 에 묶인 노드라 노드가 camera.* 를 다
+          적용한 뒤에 따로 쓴다. 이 상자의 값은 [ISP 튜닝] 에서 실행 중에 바로 바꿀 수 있다.
+      pc:
+        title: "PC 처리 · 출력"
+        hint: >-
+          카메라에 가지 않는 설정 — 타임스탬프, 무엇을 발행할지, GUI 미리보기(RAW 를 자동 밝기로 그린 것, 연구용 RGB 아님).
+
+    fields:
+      # --- 카메라 제어 ---
+      - subset: visible
+        panel: camera
+        section: "영상 포맷 · 프레임레이트"
+        key: "pixel_format"
+        writes: [PixelFormat]
+        label: "픽셀 포맷"
+        type: enum
+        choices: ["BayerRG16", "BayerRG12p", "BayerRG8"]
+        help: "BayerRG16 = 12-bit 코드 << 4 (코드 간격 16, 위상은 BlackLevel 의 소수 부분). 노이즈 캘리브레이션이 이 스케일이다. BayerRG12p 는 링크를 25% 아끼지만 카메라가 16-bit 값을 12-bit 로 반올림해 보내 블랙 offset 이 BlackLevel 1% 에서 +4 DN 달라진다 (명세 §9 R1). BayerRG8 은 RAW 가 잘린다."
+      - subset: visible
+        panel: camera
+        section: "영상 포맷 · 프레임레이트"
+        key: "camera.AcquisitionFrameRateEnable"
+        label: "프레임레이트 상한 켜기"
+        type: bool
+        help: "끄면 자유 실행 — 노출이 길면 그만큼 느려지고, 짧으면 링크 제한만큼 빨라진다. 켜면 노출 시간 상한이 1/fps 로 묶여 저조도 장노출을 못 준다."
+      - subset: visible
+        panel: camera
+        section: "영상 포맷 · 프레임레이트"
+        key: "camera.AcquisitionFrameRate"
+        label: "프레임레이트 상한"
+        type: float
+        min: 0.5
+        max: 60.0
+        step: 0.5
+        unit: "Hz"
+        relevant_when: {"camera.AcquisitionFrameRateEnable": true}
+        implies: {"camera.AcquisitionFrameRateEnable": true}
+        help: "켜 둘 때만 쓴다. 노출 시간이 1/fps 를 넘을 수 없다."
+      - subset: visible
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.ExposureAuto"
+        label: "노출 auto"
+        type: enum
+        choices: ["Off", "Once", "Continuous"]
+        help: "RAW 데이터는 Off 로 노출을 정해 찍는다. 프레임마다 실제 노출은 metadata.exposure_time_us (chunk)."
+      - subset: visible
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.ExposureTime"
+        live_alias: "camera.ExposureTime_FloatVal"
+        label: "노출 시간"
+        type: float
+        min: 10.0
+        max: 30000000.0
+        step: 1000.0
+        unit: "µs"
+        enabled_when: {"camera.ExposureAuto": "Off"}
+        help: "자유 실행이면 30 s 까지 된다 (프레임레이트 상한을 켜면 1/fps 까지). 노출이 끝날 때 카메라 타임스탬프가 찍히고 노드가 노출만큼 빼서 header.stamp = 노출 시작."
+      - subset: visible
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.GainAuto"
+        label: "게인 auto"
+        type: enum
+        choices: ["Off", "Once", "Continuous"]
+      - subset: visible
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.GainDB_Val"
+        label: "게인"
+        type: float
+        min: 0.0
+        max: 47.0
+        step: 1.0
+        unit: "dB"
+        enabled_when: {"camera.GainAuto": "Off"}
+        help: "0 dB = 기준 캘리브레이션 조건. 게인을 바꾸면 그 게인으로 노이즈 캘리브레이션(§6)을 다시 한다."
+      - subset: visible
+        panel: camera
+        section: "네트워크"
+        key: "camera.DeviceLinkThroughputLimit"
+        label: "카메라당 링크 대역폭"
+        type: int
+        scale: 1000000
+        min: 5
+        max: 125
+        step: 5
+        unit: "MB/s"
+        help: "LUCID 와 합이 ~70 MB/s 를 넘으면 스위치에서 패킷이 버려진다 (실측). BayerRG16 4.61 MB/프레임: 20 MB/s 면 ~4.3 fps. 실행 중에도 바꿀 수 있다."
+      - subset: visible
+        panel: camera
+        section: "네트워크"
+        key: "camera.GevSCPSPacketSize"
+        label: "GigE 패킷 크기"
+        type: int
+        min: 576
+        max: 9000
+        step: 4
+        unit: "B"
+        help: "NIC MTU 이하. enp5s0 은 MTU 1500 이라 1400. 점보 프레임(MTU 9000)으로 바꾸면 이 값도 9000."
+
+      # --- RAW: 카메라 안의 처리 끄기 ---
+      - subset: visible
+        panel: isp
+        section: "ADC · 블랙 레벨"
+        key: "camera.AdcBitDepth"
+        label: "ADC 비트"
+        type: enum
+        choices: ["Bit12", "Bit10"]
+        help: "Bit12. 10-bit 면 0 dB 에서 코드 한 칸이 약 11 e⁻ 로 read noise(2.4 e⁻)보다 크다."
+      - subset: visible
+        panel: isp
+        section: "ADC · 블랙 레벨"
+        key: "camera.BlackLevelClampingEnable"
+        label: "블랙 클램프"
+        type: bool
+        help: "끈다. 켜면 블랙 근처가 잘린다 (3DRAW 야간 G 픽셀 최대 45% 가 최저 코드)."
+      - subset: visible
+        panel: isp
+        section: "ADC · 블랙 레벨"
+        key: "raw.black_level_percent"
+        label: "블랙 레벨"
+        type: float
+        min: 0.0
+        max: 10.0
+        step: 0.25
+        unit: "%"
+        help: "BlackLevelSelector=All. 1 % → offset 약 635 DN @20 ms. 0 % 면 dark 분포가 0 에서 잘린다 (평균 16 DN, 실측). 끝자리 위상이 바뀐다 (0.5 %→4, 1 %→12)."
+      - subset: visible
+        panel: isp
+        section: "ADC · 블랙 레벨"
+        key: "raw.white_level_dn"
+        label: "포화 코드값"
+        type: int
+        min: 0
+        max: 65535
+        step: 1
+        unit: "DN"
+        help: "metadata.white_level_dn 에 그대로 실린다. 26315393 실측 65516 (0 dB, Bit12, BlackLevel 1 %). 0 = 모름."
+      - subset: visible
+        panel: isp
+        section: "화이트밸런스"
+        key: "camera.BalanceWhiteAuto"
+        label: "WB auto"
+        type: enum
+        choices: ["Off", "Once", "Continuous"]
+        help: "Off. auto 면 프레임마다 다른 WB 가 RAW 에 곱해진다 (3DRAW)."
+      - subset: visible
+        panel: isp
+        section: "화이트밸런스"
+        key: "raw.balance_ratio_red"
+        label: "WB 비율 R"
+        type: float
+        min: 0.25
+        max: 4.0
+        step: 0.01
+        enabled_when: {"camera.BalanceWhiteAuto": "Off"}
+        help: "1.0 (RAW 에 아무것도 곱하지 않음). BalanceWhiteAuto=Off 일 때만 쓸 수 있다."
+      - subset: visible
+        panel: isp
+        section: "화이트밸런스"
+        key: "raw.balance_ratio_blue"
+        label: "WB 비율 B"
+        type: float
+        min: 0.25
+        max: 4.0
+        step: 0.01
+        enabled_when: {"camera.BalanceWhiteAuto": "Off"}
+        help: "1.0"
+      - subset: visible
+        panel: isp
+        section: "톤 · 결함 화소"
+        key: "camera.GammaEnable"
+        label: "감마"
+        type: bool
+        help: "끈다."
+      - subset: visible
+        panel: isp
+        section: "톤 · 결함 화소"
+        key: "camera.LUTEnable"
+        label: "LUT"
+        type: bool
+        help: "끈다."
+      - subset: visible
+        panel: isp
+        section: "톤 · 결함 화소"
+        key: "camera.DefectCorrectStaticEnable"
+        label: "결함 화소 보정"
+        type: bool
+        help: "끈다 — hot pixel 은 노이즈 캘리브레이션(§6)에서 직접 잰다."
+
+      # --- PC 처리 · 출력 ---
+      - subset: visible
+        panel: pc
+        section: "타임스탬프"
+        key: "timestamp.mode"
+        label: "header.stamp 기준"
+        type: enum
+        choices: ["camera_latched", "host"]
+        help: "camera_latched = 노출 시작 (카메라 카운터를 2초마다 래치해 PC 시계로 옮김, 오차 1 ms 미만). host = PC 가 받은 시각."
+      - subset: visible
+        panel: pc
+        section: "출력"
+        key: "publish_raw"
+        label: "image_raw 발행"
+        type: bool
+        help: "RAW 연구 데이터 그 자체 — 끄지 않는다."
+      - subset: visible
+        panel: pc
+        section: "출력"
+        key: "publish_rgb_compressed"
+        label: "미리보기 JPEG 발행"
+        type: bool
+      - subset: visible
+        panel: pc
+        section: "출력"
+        key: "rgb_compressed_mode"
+        label: "미리보기 방식"
+        type: enum
+        choices: ["preview", "full"]
+        help: "preview = RAW 를 절반 해상도 · 자동 밝기로 그림 (저조도도 보인다). full = 카메라 영상을 그대로 RGB8 JPEG (16-bit 의 상위 8비트만 남아 저조도는 검다)."
+      - subset: visible
+        panel: pc
+        section: "미리보기"
+        key: "preview.max_rate_hz"
+        label: "미리보기 초당 장수"
+        type: float
+        min: 0.5
+        max: 30.0
+        step: 0.5
+        unit: "Hz"
+      - subset: visible
+        panel: pc
+        section: "미리보기"
+        key: "preview.gain"
+        label: "미리보기 밝기 (고정)"
+        type: float
+        min: 0.0
+        max: 10000.0
+        step: 1.0
+        help: "0 = 자동 (G 평균이 목표 밝기가 되게). 값을 주면 고정 디지털 게인 — 미리보기에만 걸린다."
+      - subset: visible
+        panel: pc
+        section: "미리보기"
+        key: "preview.target_mean"
+        label: "미리보기 목표 밝기"
+        type: float
+        min: 0.02
+        max: 0.8
+        step: 0.02
+      - subset: visible
+        panel: pc
+        section: "미리보기"
+        key: "preview.noise_ceiling"
+        label: "미리보기 노이즈 상한"
+        type: float
+        min: 0.0
+        max: 0.5
+        step: 0.01
+        help: "자동 밝기가 dark 노이즈를 표시 범위의 이 비율 넘게 키우지 않는다 — 렌즈캡이면 회색 노이즈 대신 검게. 0 = 끔."
+      - subset: visible
+        panel: pc
+        section: "수신"
+        key: "buffer_handling_mode"
+        label: "수신 버퍼 처리"
+        type: enum
+        choices: ["OldestFirst", "NewestOnly", "NewestFirst", "OldestFirstOverwrite"]
+        help: "OldestFirst — 밀린 프레임을 순서대로 다 낸다. NewestOnly 는 밀리면 조용히 버린다 (frame id 로만 보임)."
+
+      # --- 런치 인자 ---
+      - target: launch_arg
+        key: sequential_start
+        label: "순차 기동"
+        type: bool
+        default: false
+        help: "카메라가 한 대라 끈다."
+      - target: launch_arg
+        key: ptp_master_interface
+        label: "PTP grandmaster NIC"
+        type: string
+        default: ""
+        placeholder: "자동 (랩: 안 띄움)"
+        empty_value: "none"
+        help: "랩 리그는 PTP 를 쓰지 않는다. 비워 두면 동기 역할이 없어서 ptp4l 을 안 띄운다."
+      - target: launch_arg
+        key: publish_extrinsics_tf
+        label: "리그 extrinsics TF 발행"
+        type: bool
+        default: false
+        help: "랩 카메라는 리그 extrinsics 가 없다."
+
+  # ---------------------------------------------------------------------------
+  # LUCID TRI054S-C (Sony IMX490) — ~/jsh/LUCID_control (lucid_raw_camera)
+  # FLIR 노드와 같은 계약: 쓰기 가능한 GenICam 노드 전부가 camera.* 파라미터, 실행 중 변경, chunk 메타데이터
+  # (LucidMetadata), 노드맵 덤프, 'Camera acquisition started'. 스트리밍 중 잠기는 노드(HDROutput ·
+  # AcquisitionFrameRate · PixelFormat …)는 노드가 스트림을 잠깐 멈췄다 적용한다.
+  # ---------------------------------------------------------------------------
+  - key: lucid_cameras
+    label: "LUCID 카메라"
+    node_name: lucid_camera
+    workspaces:
+      - "~/jsh/LUCID_control/scripts/setup_lucid_env.bash"
+      - "~/jsh/LUCID_control/install/setup.bash"
+    launch_package: lucid_raw_camera
+    launch_file: lucid_cameras.launch.py
+    workdir: "~/jsh/LUCID_control"
+    ready_log: "Camera acquisition started"
+    issue_logs:
+      - match: "startup camera override(s) NOT applied"
+        text: "설정 일부가 카메라에 안 들어감"
+      - match: "not in effect after startup"
+        text: "설정 일부가 카메라에 안 남음 — 다른 설정이 덮어썼거나 카메라가 거부 (런치 로그)"
+      - match: "Stopping acquisition after fatal Arena stream error"
+        text: "카메라 연결 끊김 — 영상 받기를 멈춤 (케이블 · PoE 확인 후 재기동)"
+      - match: "Incomplete image received"
+        text: "불완전 프레임 — 링크에서 패킷이 버려짐 (두 카메라 링크 대역폭 합 · 프레임레이트 확인)"
+        recurring: true
+      - match: "NEW_BUFFER_DATA"
+        text: "프레임이 안 옴 (노출 · 트리거 · 링크 확인)"
+        recurring: true
+    managed_params:
+      camera_serial: "런치가 인벤토리의 serial 로 카메라마다 덮어씁니다"
+      camera_index: "camera_serial 이 있으면 쓰이지 않습니다"
+      frame_id: "런치가 카메라마다 <이름>_optical_frame 으로 덮어씁니다"
+      profile_path: "런치가 params 파일 경로를 넣습니다 (노드맵 덤프에 남는다)"
+      "lens.*": "카메라마다 다르다 — 인벤토리(lab_lucid_cameras.yaml)의 lens_model · f_number 로 정합니다"
+      "network.force_ip.*": "IP 는 GUI 가 기동 전에 맞춥니다 ([IP 할당] / IP 자동 맞춤)"
+      "camera.Chunk*": "chunk 는 노드가 chunk_data.* 로 정합니다"
+      camera.PixelFormat: "픽셀 포맷은 pixel_format 칸이 정합니다"
+      camera.AcquisitionMode: "노드가 Continuous 로 둡니다"
+      camera.BalanceRatio: "WB 비율은 raw.balance_ratio_* 로 R · G · B 따로 정합니다"
+      camera.BalanceRatioSelector: "WB 비율은 raw.balance_ratio_* 로 정해서 선택자가 필요 없습니다"
+      camera.BlackLevel: "블랙 레벨은 raw.black_level_raw (DN) 가 정합니다"
+      camera.BlackLevelRaw: "블랙 레벨은 raw.black_level_raw (DN) 가 정합니다"
+      camera.BlackLevelSelector: "블랙 레벨은 raw.black_level_raw 가 All 로 씁니다"
+      camera.GevSCPD: "패킷 간 지연은 링크 대역폭 제한이 정합니다 — 둘은 카메라 안에서 같은 값의 짝입니다"
+      camera.LUTIndex: "LUT 는 인덱스로 고르는 표라 파라미터 파일로는 한 칸밖에 못 씁니다"
+      camera.LUTValue: "LUT 는 인덱스로 고르는 표라 파라미터 파일로는 한 칸밖에 못 씁니다"
+      camera.ColorTransformationValueSelector: "색변환 행렬은 선택자로 하나씩 고르는 구조라 파라미터 파일로 못 씁니다 (노드맵 덤프에는 전부 남는다)"
+      camera.ColorTransformationValue: "색변환 행렬은 선택자로 하나씩 고르는 구조라 파라미터 파일로 못 씁니다 (노드맵 덤프에는 전부 남는다)"
+    managed_launch_args:
+      enable_cameras: "GUI 가 카드 체크로 정합니다"
+    subsets:
+      - key: tri054
+        label: "LUCID TRI054S (IMX490)"
+        short_label: "TRI054"
+        model_patterns: ["TRI054S"]
+        enable_arg: enable_cameras
+        inventory: "~/jsh/LUCID_control/src/lucid_raw_camera/config/lab_lucid_cameras.yaml"
+        inventory_arg: cameras_file
+        name_prefix: lucid
+        force_ip_base: "192.168.100.201"
+        sync_roles: false
+        params: "~/jsh/LUCID_control/src/lucid_raw_camera/config/lucid_camera_raw.yaml"
+        params_arg: params_file
+        topic_regex: "^/lucid[a-z0-9_]*/"
+        checks:
+          sensor: [2880, 1860]
+          uplink_MBps: 70
+          link_reserve_pct: 10
+          shared_link:
+            name: "enp5s0 (랩 스위치 → PC 1 GbE)"
+            MBps: 70
+            why: >-
+              2026-10-19 실측: 합이 ~72 MB/s 를 넘으면 스위치에서 패킷이 버려져 LUCID 프레임(패킷 ~1.1만 개)이 전부
+              불완전해졌다 (PC 쪽 NIC · 소켓 드롭 0). 카메라를 PC 의 다른 NIC 포트에 따로 꽂으면 각자 1 GbE 를 쓴다.
+        tuning:
+          panels: [isp]
+          sections: ["노출 · 게인", "HDR · 포맷", "미리보기"]
+          live_prefixes: ["raw.", "preview.", "pixel_format", "exposure."]
+          node_restarts_stream: true
+        forced_params:
+          nodemap_dump_dir: "/mnt/data/jsh_raw/nodemap"
+        genicam:
+          xml: "~/.config/dm_clip_gui_raw/genicam/Lucid_Vision_Labs_TRI054S-C_*.zip"
+          categories: [HDRControl, ImageFormatControl, ColorTransformationControl, LUTControl]
+    discovery:
+      kind: gvcp
+      nics: [enp5s0]
+
+    panels:
+      camera:
+        title: "카메라 제어"
+        hint: >-
+          무엇을 · 얼마나 밝게 찍을지. TRI054S 는 노출이 프레임 주기를 못 넘어서, 긴 노출은 노드가 프레임레이트를 맞춰
+          내린다 (exposure.auto_frame_rate). HDROutput · 픽셀 포맷 · 프레임레이트는 스트리밍 중 잠기는 노드라 실행 중에
+          바꾸면 노드가 스트림을 ~0.5초 멈췄다 적용한다.
+      isp:
+        title: "RAW — 카메라 안의 처리 끄기 · 노출"
+        hint: >-
+          IMX490 PTC 측정(~/jsh/imx490_ptc)과 같은 조건: Gain 0 dB, BlackLevelRaw 256, WB · 색변환 · LUT · HDR 보정 ·
+          HDR 클램프 끔. 이 상자의 값은 [ISP 튜닝] 에서 실행 중에 바로 바꿀 수 있다.
+      pc:
+        title: "PC 처리 · 출력"
+        hint: >-
+          카메라에 가지 않는 설정 — 타임스탬프, 24-bit 를 담는 방법, GUI 미리보기(연구용 RGB 아님).
+
+    fields:
+      # --- HDR · 포맷 ---
+      - subset: tri054
+        panel: isp
+        section: "HDR · 포맷"
+        key: "camera.HDROutput"
+        label: "HDR 출력"
+        type: enum
+        choices: ["HDR", "HDRChannel0", "HDRChannel1", "HDRChannel2", "HDRChannel3"]
+        help: "HDR = 네 채널 합성 (24-bit). HDRChannelN = 한 채널 (12-bit 코드 + 페데스탈). PTC: ch0 SP1 HCG (α≈9.6 DN/e⁻, read 0.53 e⁻), ch1 SP1 LCG (0.45, 2.5 e⁻), ch2 SP2 (0.97, 13.5 e⁻), ch3 SP2 다른 게인. 저조도의 dark 구간은 HDR 합성 = ch0."
+      - subset: tri054
+        panel: isp
+        section: "HDR · 포맷"
+        key: "pixel_format"
+        label: "픽셀 포맷"
+        type: enum
+        choices: ["BayerRG24", "BayerRG16", "BayerRG12p"]
+        help: "BayerRG24 = 전부 그대로 (16.1 MB/프레임). 채널 출력을 BayerRG16 · 12p 로 받으면 min(값, 4095) 로 잘려 포화 근처 256 코드를 잃는다 (실측). 12p 는 대역폭이 절반이라 프레임레이트를 두 배로 쓸 수 있다."
+      - subset: tri054
+        panel: pc
+        section: "포맷"
+        key: "raw24_container"
+        label: "24-bit 담는 방법"
+        type: enum
+        choices: ["uint32", "packed"]
+        help: "uint32 = 픽셀당 32-bit (encoding 32SC1, cv_bridge 로 바로). packed = 카메라가 보낸 3바이트 그대로 (bayer_rggb24, 25% 작다)."
+      - subset: tri054
+        panel: isp
+        section: "HDR · 포맷"
+        key: "camera.HDRImageEnhancementEnable"
+        label: "HDR 영상 보정"
+        type: bool
+        help: "끈다 — 합성 출력에 거는 처리."
+      - subset: tri054
+        panel: isp
+        section: "HDR · 포맷"
+        key: "camera.HDRDigitalClampingEnable"
+        label: "HDR 디지털 클램프"
+        type: bool
+        help: "끈다."
+
+      # --- 노출 · 게인 ---
+      - subset: tri054
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.ExposureAuto"
+        label: "노출 auto"
+        type: enum
+        choices: ["Off", "Once", "Continuous"]
+      - subset: tri054
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.ExposureTime"
+        label: "노출 시간"
+        type: float
+        min: 87.0
+        max: 10000000.0
+        step: 1000.0
+        unit: "µs"
+        enabled_when: {"camera.ExposureAuto": "Off"}
+        help: "프레임 주기보다 길면 노드가 프레임레이트를 맞춰 내린다 (1 s → 1 Hz, 스트림 재시작 ~0.5 초). 설정을 바꾼 직후 두 프레임은 metadata.settled=false."
+      - subset: tri054
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.AcquisitionFrameRate"
+        label: "프레임레이트 상한"
+        type: float
+        min: 0.2
+        max: 19.0
+        step: 0.1
+        unit: "Hz"
+        implies: {"camera.AcquisitionFrameRateEnable": true}
+        help: "노출에 맞춘 자동 조정의 상한. BayerRG24 · 45 MB/s 면 2.0 Hz 까지 (카메라가 링크의 10% 를 재전송용으로 남긴다)."
+      - subset: tri054
+        panel: isp
+        section: "노출 · 게인"
+        key: "exposure.auto_frame_rate"
+        label: "노출에 맞춰 프레임레이트 조정"
+        type: bool
+        help: "켜면 노출이 프레임 주기보다 길 때 노드가 프레임레이트를 내리고, 짧아지면 상한까지 올린다."
+      - subset: tri054
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.GainAuto"
+        label: "게인 auto"
+        type: enum
+        choices: ["Off", "Once", "Continuous"]
+      - subset: tri054
+        panel: isp
+        section: "노출 · 게인"
+        key: "camera.Gain"
+        label: "게인"
+        type: float
+        min: 0.0
+        max: 42.0
+        step: 1.0
+        unit: "dB"
+        enabled_when: {"camera.GainAuto": "Off"}
+        help: "0 dB = PTC 조건. HDR 채널별 analog gain(19.8/4.2/29.4/4.2 dB)은 이것과 별개다 (metadata.hdr_channel_analog_gain_db)."
+
+      # --- RAW: 처리 끄기 ---
+      - subset: tri054
+        panel: isp
+        section: "블랙 레벨 · 포화"
+        key: "raw.black_level_raw"
+        label: "블랙 레벨 (페데스탈)"
+        type: int
+        min: 0
+        max: 512
+        step: 16
+        unit: "DN"
+        help: "256. 0 이면 dark 의 47~97 % 가 0 으로 잘리고, 64 에서도 ch2 에 0 이 남는다 (dark_probe)."
+      - subset: tri054
+        panel: isp
+        section: "블랙 레벨 · 포화"
+        key: "raw.white_level_dn"
+        label: "포화 코드값"
+        type: int
+        min: -1
+        max: 16777215
+        step: 1
+        unit: "DN"
+        help: "-1 = 자동 (채널 출력: BayerRG24 4095+페데스탈, 16 → 65520, 12p → 4095). HDR 합성은 아직 못 재서 0."
+      - subset: tri054
+        panel: isp
+        section: "처리 끄기"
+        key: "camera.BalanceWhiteAuto"
+        label: "WB auto"
+        type: enum
+        choices: ["Off", "Once", "Continuous"]
+      - subset: tri054
+        panel: isp
+        section: "처리 끄기"
+        key: "camera.BalanceWhiteEnable"
+        label: "WB 적용"
+        type: bool
+        help: "끈다."
+      - subset: tri054
+        panel: isp
+        section: "처리 끄기"
+        key: "camera.ColorTransformationEnable"
+        label: "색변환 (CCM)"
+        type: bool
+        help: "끈다. 카메라 CCM 계수는 노드맵 덤프의 selected.ColorTransformationValueSelector 에 남는다."
+      - subset: tri054
+        panel: isp
+        section: "처리 끄기"
+        key: "camera.LUTEnable"
+        label: "LUT"
+        type: bool
+        help: "끈다."
+
+      # --- 네트워크 ---
+      - subset: tri054
+        panel: camera
+        section: "네트워크"
+        key: "camera.DeviceLinkThroughputLimit"
+        label: "카메라당 링크 대역폭"
+        type: int
+        scale: 1000000
+        min: 31
+        max: 125
+        step: 5
+        unit: "MB/s"
+        implies: {"camera.DeviceLinkThroughputLimitMode": "On"}
+        help: "BFS 와 합이 ~70 MB/s 를 넘으면 스위치에서 패킷이 버려진다 (실측). 카메라는 이 값의 10 % 를 재전송용으로 남긴다."
+
+      # --- PC 처리 · 출력 ---
+      - subset: tri054
+        panel: pc
+        section: "타임스탬프"
+        key: "timestamp.mode"
+        label: "header.stamp 기준"
+        type: enum
+        choices: ["camera_latched", "host"]
+        help: "camera_latched = 카메라 시계를 TimestampLatch 로 2초마다 PC 시계에 맞춰 옮긴 프레임 시각. host = PC 가 받은 시각 (16 MB 전송만큼 늦다)."
+      - subset: tri054
+        panel: pc
+        section: "출력"
+        key: "publish_raw"
+        label: "image_raw 발행"
+        type: bool
+      - subset: tri054
+        panel: pc
+        section: "미리보기"
+        key: "preview.max_rate_hz"
+        label: "미리보기 초당 장수"
+        type: float
+        min: 0.5
+        max: 10.0
+        step: 0.5
+        unit: "Hz"
+      - subset: tri054
+        panel: pc
+        section: "미리보기"
+        key: "preview.gain"
+        label: "미리보기 밝기 (고정)"
+        type: float
+        min: 0.0
+        max: 1000000.0
+        step: 10.0
+        help: "0 = 자동."
+      - subset: tri054
+        panel: pc
+        section: "미리보기"
+        key: "preview.target_mean"
+        label: "미리보기 목표 밝기"
+        type: float
+        min: 0.02
+        max: 0.8
+        step: 0.02
+      - subset: tri054
+        panel: pc
+        section: "미리보기"
+        key: "preview.noise_ceiling"
+        label: "미리보기 노이즈 상한"
+        type: float
+        min: 0.0
+        max: 0.5
+        step: 0.01
+
+      # --- 런치 인자 ---
+      - target: launch_arg
+        key: sequential_start
+        label: "순차 기동"
+        type: bool
+        default: true
+        help: "카메라가 여러 대면 앞 카메라가 'Camera acquisition started' 를 찍은 뒤에 다음을 띄운다."

@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>flir_camera_calibration</name>
+  <version>0.1.0</version>
+  <description>Interactive ROS 2 chessboard calibration tool for FLIR compressed RGB images.</description>
+  <maintainer email="codex@example.com">Codex</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>libopencv-dev</depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

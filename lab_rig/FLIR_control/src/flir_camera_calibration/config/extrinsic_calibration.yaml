@@ -1,0 +1,63 @@
+flir_camera_extrinsic_calibration:
+  ros__parameters:
+    # multicam_extrinsic_calibration.launch.py overrides these from the camera
+    # inventory YAML. They only apply when the node runs standalone.
+    camera_namespaces: ["camera_center", "camera_front_right", "camera_front_left",
+                        "camera_side_right_1", "camera_side_right_2",
+                        "camera_side_left_1", "camera_side_left_2", "camera_rear"]
+    camera_names: ["camera_center", "camera_front_right", "camera_front_left",
+                   "camera_side_right_1", "camera_side_right_2",
+                   "camera_side_left_1", "camera_side_left_2", "camera_rear"]
+    camera_serials: ["25415248", "26076473", "26076477", "25415254",
+                     "26076472", "25415250", "25415249", "26076003"]
+    camera_frame_ids: ["camera_center_optical_frame", "camera_front_right_optical_frame",
+                       "camera_front_left_optical_frame", "camera_side_right_1_optical_frame",
+                       "camera_side_right_2_optical_frame", "camera_side_left_1_optical_frame",
+                       "camera_side_left_2_optical_frame", "camera_rear_optical_frame"]
+    reference_camera: "camera_center"
+    reference_frame: "flir_rig_frame"
+
+    image_topic: "image_rgb/compressed"
+    camera_info_topic: "camera_info"
+    output_yaml_path: "calibration/flir_camera_extrinsics.yaml"
+
+    # Board type: "chessboard" (plain checkerboard) or "charuco" (ChArUco board).
+    # ChArUco resolves the plain board's 180-degree orientation ambiguity, so it is
+    # the more robust choice for multi-camera extrinsics.
+    board_type: "chessboard"
+
+    # Used when board_type=chessboard (inner-corner counts, not squares).
+    board_cols: 6
+    board_rows: 5
+    square_size_m: 0.08
+
+    # Used when board_type=charuco. squares_x/squares_y are the full square counts;
+    # marker length must be < square length; aruco_dictionary must match the board.
+    charuco_squares_x: 8
+    charuco_squares_y: 7
+    charuco_square_length_m: 0.12
+    # Approximate: charuco pose uses the chessboard corners (square size), so this
+    # only needs to be a valid value < square length. Set it to the printed marker
+    # size if you have it.
+    charuco_marker_length_m: 0.09
+    aruco_dictionary: "DICT_5X5_1000"
+
+    min_observations: 5
+    max_frame_age_ms: 500
+    # false: capture whichever >=2 cameras currently see the board and solve a pairwise graph.
+    # true : require every configured camera to see the board for each observation.
+    require_all_cameras_for_capture: false
+
+    display_window: true
+    window_name: "FLIR Extrinsic Calibration"
+    # ChArUco needs resolution to decode markers; 640 drops most corners on the
+    # 1920-wide fisheye rig. 1280 keeps enough for the preview readiness gate.
+    preview_max_width: 1280
+    preview_fast_check: true
+
+    input_qos_reliability: "best_effort"
+    # Keep only the latest compressed frame; chessboard detection can be slower
+    # than the camera, and old queued frames create visible preview delay.
+    input_qos_depth: 1
+    camera_info_qos_reliability: "reliable"
+    camera_info_qos_depth: 1

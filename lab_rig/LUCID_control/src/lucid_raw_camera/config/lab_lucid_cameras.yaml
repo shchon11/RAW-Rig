@@ -1,0 +1,17 @@
+# 랩 RAW 취득 리그 (~/jsh, 2026-10): LUCID TRI054S-C (Sony IMX490). BFS 는 FLIR_control 의
+# config/lab_raw_cameras.yaml 에 있다. 두 카메라 모두 enp5s0 (192.168.100.100/24).
+# 이 카메라는 DHCP/LLA 로 떠서(169.254.x.x) ForceIP(임시)로 .201 에 둔다 — 전원을 다시 넣으면 풀린다.
+# lens_model / f_number 는 카메라에서 읽을 수 없어 여기 적고 노드맵 덤프에 같이 남는다.
+lucid_multicam:
+  ros__parameters:
+    cameras:
+      - name: "lucid_tri054"
+        serial: "254600231"
+        namespace: "lucid_tri054"
+        frame_id: "lucid_tri054_optical_frame"
+        force_ip_address: "192.168.100.201"
+        force_ip_subnet_mask: "255.255.255.0"
+        force_ip_gateway: "0.0.0.0"
+        mac_address: "1C0FAFDBC9B3"
+        lens_model: ""
+        f_number: ""
