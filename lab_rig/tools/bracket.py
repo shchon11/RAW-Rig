@@ -65,8 +65,10 @@ CAMS = [Cam("bfs", "camera_bfs", "/camera_bfs/flir_camera", "flir_spinnaker_came
         Cam("lucid", "lucid_tri054", "/lucid_tri054/lucid_camera", "lucid_raw_camera/msg/LucidMetadata",
             "LUCID TRI054S", "LUCID")]
 CAM = {c.key: c for c in CAMS}
-# 노출 범위 = 노이즈 모델의 유효 범위 (ptc_model.EXPOSURE_US: BFS 24 µs~1 s, LUCID 86 µs~1.0 s)
+# 노출 범위 = 노이즈 모델의 유효 범위 (ptc_model.EXPOSURE_US: BFS 24 µs~1 s, LUCID 86 µs~800 ms)
 DEFAULT_LIMITS_US = dict(ptc_model.EXPOSURE_US)
+# 카메라가 범위 밖 노출을 거절할 때의 GenICam 메시지 ("Value 86.000000 must be greater than or equal 86.264000.")
+RANGE_ERROR = re.compile(r"must be (greater|smaller|less) than or equal (-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)")
 
 
 class Stopped(Exception):
@@ -500,8 +502,22 @@ class Rig:
             time.sleep(1.0)       # 날아오던 free-run 프레임이 다 들어오게
 
     def set_exposure(self, exposure_us):
+        """노출을 넣는다. 카메라가 범위 밖이라고 거절하면 알려 준 경계값으로 다시 넣고 exposure_us 도 그 값으로 고친다.
+
+        모델 범위와 카메라 범위 끝이 조금 다를 수 있다: LUCID 모델 하한 86 µs, 카메라 하한 86.264 µs
+        (2026-10-20 scene_001 이 이걸로 bright 8단계에서 멈췄다).
+        """
         for key, value in exposure_us.items():
-            self.link.set_params(key, {"camera.ExposureTime": float(value)})
+            try:
+                self.link.set_params(key, {"camera.ExposureTime": float(value)})
+            except RuntimeError as e:
+                m = RANGE_ERROR.search(str(e))
+                if m is None:
+                    raise
+                bound = float(m.group(2)) + (1e-3 if m.group(1) == "greater" else -1e-3)
+                self.link.set_params(key, {"camera.ExposureTime": bound})
+                self.log(f"  {CAM[key].label}: 노출 {value:.3f} µs 는 카메라 범위 밖이라 {bound:.3f} µs 로 넣었다")
+                exposure_us[key] = bound
         self.dirty = True
         self.changed_ns = time.time_ns()     # free-run 프레임은 이 뒤에 노출이 시작된 것만 받는다
 
