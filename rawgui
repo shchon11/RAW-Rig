@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 랩 RAW 취득 GUI (BFS · LUCID) — ~/jsh/DM_clipGUI/scripts/clip_launch.sh 를 띄운다.
+# 원본 DataMachine GUI(dm)와 같은 PC 에서 따로 돈다: ROS_DOMAIN_ID 42, 설정 ~/.config/dm_clip_gui_raw.
+exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/DM_clipGUI/scripts/clip_launch.sh" "$@"
