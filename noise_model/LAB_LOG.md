@@ -202,3 +202,54 @@ chunk의 노출시간이 요청값과 다른 프레임은 버린다(설정 변�
   - 그 위에서 SP2로 넘어가며 국소 α가 15~19배 뛴다(SNR dip)
   - R은 G보다 낮은 신호에서 전환된다. 2×2 단위로 판단하는 것으로 보인다
 - 그림: `analysis/ptc_overview.png`, 출력별 `analysis/<output>.png`
+
+## 2026-10-20 오후: LUCID HDR 합성 규칙, 저조도, PRNU, 포화 근처
+
+데이터는 외장 SSD `noise_calibration_20261020/data/session_20261020_pm/`에 있다(약 120 GB).
+그림과 요약 수치는 `results_20261020/`에 있다. 아직 `noise_model.py`와 보정 패키지에는 반영하지 않았다.
+
+### 세션
+| 폴더 | 내용 | 스크립트 |
+|------|------|----------|
+| `hdr_transition_0dB` | LUCID 0 dB, 흰 종이, 1–120 ms 22단계. HDR 48장 + HDRChannel0–3 각 12장 + 같은 노출 dark | `hdr_transition_capture.py` |
+| `hdr_transition_12dB` | 12 dB, HDR만 8단계 + dark(12 dB로 재촬영) | 같음, `--hdr-only --gain-db 12` |
+| `lowlight` | 조리개를 조여 0.2 e⁻까지. LUCID HDR+채널 8단계, BFS 0/24 dB 10단계, 각각 dark | `lowlight_capture.sh`, `all_darks.sh` |
+| `dark_extra` | 긴 노출 dark(BFS 50 ms–5 s 0/24 dB, LUCID 150–800 ms), RTS 확인용 긴 스택(BFS 1 ms 300장, LUCID 87 µs 120장) | `dark_extra.sh` |
+| `prnu_flats` | 렌즈 앞 복사지 확산판. BFS 5–37 ms 6단계, LUCID 1–800 ms 10단계, 각 32장 | `fullframe_dark.py`, `prnu_analyze.py` |
+| `bfs_saturation` | BFS 복사지, 42–75 ms(포화의 약 80–150%) 32장 | `flat_figures.py` |
+| `color_transition` | LUCID 색종이 7색(핑크·흰·노랑·보라·빨강·초록·파랑), HDR만 0.1–100 ms 28단계 | `color_transition_analysis.py`, `ch0_ch1_handover.py` |
+
+### LUCID HDR 합성 규칙 (0 dB DN, gain과 무관; 12 dB에서 같은 센서 신호 위치)
+| 전환 | 위치 | 방식 | 결정 단위 |
+|------|------|------|-----------|
+| ch0 → ch1 (SP1, HCG→LCG) | 약 3,900 DN (≈400 SP1 e⁻, ch0 포화) | 프레임마다 하드 전환 | 픽셀 |
+| SP1 → SP2 | 묶음 판정값 반반 지점 48.5–49.8k DN, 폭 약 15k | **가중 평균으로 섞음** | 2×2 묶음 |
+| ch2 → ch3 (SP2, HCG→LCG) | 약 55–60만 DN (ch2 신호 ≈3,700–3,800 DN) | 프레임마다 하드 전환 | 픽셀 |
+
+- SP1→SP2 판정값: **각 픽셀의 SP1 값을 SP1 LCG 상한(≈21.7×4095 ≈ 8.9만 DN)에서 자른 뒤 네 픽셀을 같은 무게로 평균**.
+  7색에서 반반 지점의 흩어짐(log 표준편차) 0.007. G 평균 0.226, 최댓값 0.255, 자르지 않은 평균 0.032
+- 섞는 비율 w(판정값)은 분산으로 풀었다: Var = w²·V1(S) + (1−w)²·V2(S) (`hdr_transition_blend.py`, `results_20261020/sp1_sp2_blend_weight.json`)
+- 섞는 구간에서 이미 SP1이 포화된 픽셀(진한 색의 밝은 채널)은 잘린 값이 섞여 평균이 최대 약 10% 처진다(파랑·보라의 B 9–10%, 빨강의 R 3%). SP2로 다 넘어가면 회복된다
+- HDR 값은 채널마다 격자 위에 있다: K1(ch1) R 21.714 / Gr 21.706 / Gb 21.754 / B 21.718, K2(ch2) R 156.51 / Gr 144.95 / Gb 146.48 / B 140.37 DN/코드, K3(ch3) ≈ 37·K2(색마다 36.98–37.02로 조금씩 다름)
+- `hdr_transition_sources.py`, `hdr_transition_ch3.py`는 격자로 프레임별 출처를 가르려던 시도다. 섞는 구간과 K3 오차 때문에 최종 결론에는 쓰지 않았다
+
+### 저조도, dark
+- 두 카메라 모두 약 0.2 e⁻부터 PTC 모델(BFS: 분산 = S + read², LUCID 채널별)과 맞는다. 그림은 픽셀 평균으로 묶을 때 생기는 치우침을 피하려고 짝수 프레임 평균으로 묶고 홀수 프레임으로 평균·분산을 낸다
+- LUCID ch3 저신호 바닥은 G가 R·B보다 높다(분산 약 7 대 5.5–6 DN²). ch3 read noise는 색별로 둬야 한다
+- LUCID dark 150–800 ms: 오프셋이 노출에 비례(약 14 DN/s = 1.4 e⁻/s), 800 ms까지 오프셋 튐 없음
+- BFS 5 s dark: dark 신호 약 78 e⁻(15.6 e⁻/s), 시간 노이즈 8.5 e⁻ ≈ √78 + read
+
+### PRNU (복사지 확산판, 조리개 개방, 8 px 가우시안 고역통과)
+- BFS 0 dB: 0.91–0.95% (포화 10–50% 구간, 신호에 무관)
+- LUCID: ch0 약 0.6%, ch1 0.7–1.0%, ch2 1.2–1.4%(R 1.3–2.2%)
+- LUCID ch3 구간(800 ms, SP1 약 12배 과노출): 대부분 ±3%이지만 상위 1%가 1.4배, 0.1%가 2배 이상 밝다. SP1 과노출 시 SP2로 전하가 새는 것으로 추정되는 고정 패턴
+- 종이 장면의 "spatial" 성분 3–4.5%는 대부분 조명 얼룩·종이 질감이다(`electron_ptc.py`)
+
+### BFS 포화 근처
+- 시간 분산은 약 8,500 e⁻까지 모델을 따르고, 그 위에서 눌려 1.1만 e⁻ 근처에서 모델보다 약 20% 작다. 65516 DN(약 1.12만 e⁻)에서 하드 클립
+- 같은 픽셀의 노출당 응답은 1만 e⁻에서 약 0.5%, 1.1만 e⁻에서 약 1.5% 처진다
+
+### 기타
+- LUCID가 하루에 여러 번 저절로 재부팅(IP가 169.254로 돌아감). 촬영 전 `gvcp_ip.py force` 필요
+- `hdr_transition_capture.py dark`가 처음에는 세션 gain을 무시하고 0 dB로 찍었다. 고쳤고 12 dB dark는 다시 찍었다
+- 노이즈 성분 비율 대략치: `noise_budget.py`. BFS read noise는 gain을 올리는 내내 줄어 "앞단+뒷단" 2분할 모델이 맞지 않았다
