@@ -85,9 +85,9 @@ python3 ~/jsh/tools/rawbag.py /mnt/data/jsh_raw/recordings/scene_001_xxx/rec_...
       노출을 맨 위 단계로 잡는다.
    2. 거기서 절반씩 9단계, 단계당 3장을 찍는다. 노출은 카메라마다 모델 유효 범위 안에서 자른다
       (BFS 1 s, LUCID 800 ms — 맨 위 단계는 두 카메라 노출이 다를 수 있다. [고급]에서 둘 다 800 ms 로 맞출 수 있다).
-   3. 렌즈캡을 씌우라고 안내하고 같은 노출 단계로 dark 를 찍는다.
-      BFS 게인이 18 dB 이상이거나 BFS 를 켠 지 30분이 안 됐으면 dark 를 bright 앞에도 찍는다 (dark → bright → dark).
-      게인이 높거나 데워지는 중이면 bright 와 dark 사이에 offset 이 흐를 수 있어서다.
+   3. 장면 dark(렌즈캡)는 기본으로 찍지 않는다. 2026-10-20 사용자가 정했다: 렌즈캡을 씌우는 게 번거롭고, 노이즈 모델로 충분하다.
+      [고급]에서 dark 를 켜면 bright 뒤에 렌즈캡을 씌우라고 안내하고 같은 노출 단계로 dark 를 찍는다.
+      그때 BFS 게인이 18 dB 이상이거나 BFS 를 켠 지 30분이 안 됐으면 bright 앞에도 찍는다 (dark → bright → dark).
    4. 노출 기준 · 단계 · 장수 · dark · 깜빡임 맞춤은 [고급]에서 바꾼다.
 
 저장: `/mnt/data/jsh_raw/stills/scene_NNN_<장면>/`
@@ -96,7 +96,7 @@ python3 ~/jsh/tools/rawbag.py /mnt/data/jsh_raw/recordings/scene_001_xxx/rec_...
 |------|------|
 | `scene.json` | 장면 · 계획(노출 단계) · 카메라(드라이버 파라미터 전부) · 노이즈 모델 참조 · 쌍마다 트리거 시각 · 노출 시작 차 · `dark_shift` · `warnings` |
 | `bright/NN_ev±X.X_KK_<bfs\|lucid>.dng` (+ `.json`) | RAW. 같은 json 이 DNG 안 `DNGPrivateData` 에도 들어 있다 |
-| `dark_pre/` · `dark/` | 렌즈캡, 같은 노출 단계 (`dark_pre` 는 BFS 게인 ≥ 18 dB 이거나 워밍업 30분 전일 때만) |
+| `dark_pre/` · `dark/` | [고급]에서 dark 를 켰을 때만. 렌즈캡, 같은 노출 단계 (`dark_pre` 는 BFS 게인 ≥ 18 dB 이거나 워밍업 30분 전일 때만) |
 | `nodemap/` | 촬영 시작 때 두 카메라 노드맵 |
 
 ### 노이즈 모델과 맞추는 것 (2026-10-20 jsh-16 세션과 합의)
@@ -122,7 +122,7 @@ python3 ~/jsh/tools/rawbag.py /mnt/data/jsh_raw/recordings/scene_001_xxx/rec_...
   - LUCID HDR 은 상수 α 하나로 표현이 안 돼서 `NoiseProfile` 을 비운다
   - private json: 모델 참조(경로 · `noise_model.json` sha256 · built), 그 게인 · 노출의 CFA 별 α · read σ · dark offset · dark 분산 · row σ ·
     코드 간격, LUCID HDR 채널 전환 구간(대략값, 2×2 쿼드 단위)
-- **장면 dark 로 하는 전역 보정** (`scene.json` 의 `dark_shift`)
+- **장면 dark 로 하는 전역 보정** (`scene.json` 의 `dark_shift`, 기본으로 꺼져 있어서 dark 를 켰을 때만)
   - 노출 단계 · CFA 마다 offset 이동량(실측 평균 − 모델)과 `k_var`(표본분산 / 모델 분산, hot · noisy 마스크 밖 평균)를 남긴다
   - 이동량이 0.1 · read σ 를 넘으면 `warnings` 에 적는다
   - 픽셀 단위 dark 는 모델 지도에 이 전역 보정을 더해서 쓴다. 몇 장 평균을 픽셀마다 빼면 σ/√n 노이즈가 더해진다.
