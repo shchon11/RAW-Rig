@@ -34,6 +34,10 @@ ISP 셋업별 RGB → RAW 재구성 연구용 RAW 데이터 취득 환경. 두 �
   nodemap/              카메라 노드맵 덤프 (기동 때 · 설정 변경 2초 뒤)
 ```
 
+이 폴더의 도구(`tools/` · `config/` · 실행 스크립트 · 이 README)는 git 저장소(`~/jsh`, main)이고,
+GitHub `shchon11/RAW-Rig` 의 `lab-rig` 브랜치 `lab_rig/` 로 올린다 (git subtree, 작업 폴더 `~/jsh/RAW-Rig-lab`):
+`cd ~/jsh/RAW-Rig-lab && git subtree pull --prefix=lab_rig ~/jsh main && git push origin lab-rig`.
+
 원본 `~/DM` 은 건드리지 않았다. 랩 GUI 는 원본 DataMachine GUI 와 같은 PC 에서 따로 돈다 — 설정
 `~/.config/dm_clip_gui_raw`, ROS_DOMAIN_ID 42 (원본 레코더 · 트리거와 안 섞임), 지도 서버 · 휴대폰 연동은 안 띄운다.
 
