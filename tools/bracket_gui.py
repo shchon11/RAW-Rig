@@ -458,7 +458,9 @@ class Window(QtWidgets.QWidget):
         self.sp_steps.setValue(int(s.value("steps", 9)))
         self.cb_spacing.setCurrentIndex(int(s.value("spacing", 0)))
         self.sp_frames.setValue(int(s.value("frames", 3)))
-        self.chk_dark.setChecked(s.value("dark", "true") == "true")
+        # 장면 dark 는 기본으로 안 찍는다 (2026-10-20 사용자: 렌즈캡이 번거롭고 노이즈 모델로 충분하다).
+        # 예전 "dark"=true 저장값을 따르지 않도록 키를 바꿨다.
+        self.chk_dark.setChecked(s.value("dark_scene", "false") == "true")
         self.chk_flicker.setChecked(s.value("flicker", "true") == "true")
         self.chk_common.setChecked(s.value("clip_common", "false") == "true")
         self.cb_gain.blockSignals(True)
@@ -473,7 +475,7 @@ class Window(QtWidgets.QWidget):
                            ("rule2", self._rule()), ("target", self.sp_target.value()),
                            ("max_ms", self.sp_max.value()), ("steps", self.sp_steps.value()),
                            ("spacing", self.cb_spacing.currentIndex()), ("frames", self.sp_frames.value()),
-                           ("dark", "true" if self.chk_dark.isChecked() else "false"),
+                           ("dark_scene", "true" if self.chk_dark.isChecked() else "false"),
                            ("flicker", "true" if self.chk_flicker.isChecked() else "false"),
                            ("clip_common", "true" if self.chk_common.isChecked() else "false"),
                            ("bfs_gain", self._gain())):
