@@ -1,0 +1,5 @@
+data/
+.venv/
+env.sh
+__pycache__/
+calibration/*/maps_g*.npz

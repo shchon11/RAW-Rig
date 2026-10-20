@@ -1,0 +1,4 @@
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+# measurement only: arena_api (LUCID Arena SDK wheel), Spinnaker C library (/opt/spinnaker)

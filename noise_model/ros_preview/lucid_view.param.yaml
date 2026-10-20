@@ -1,0 +1,21 @@
+# Preview only (driver publishes 8-bit BGR from the camera's BayerRG8 + ISP). Not for PTC.
+/**:
+  ros__parameters:
+    camera_name: "lucid_imx490"
+    frame_id: "lucid_imx490"
+    pixel_format: bgr8
+    serial_no: 254600231
+    camera_info_url: ""
+    fps: 5
+    horizontal_binning: 2
+    vertical_binning: 2
+    enable_rectifying: false
+    enable_compressing: false
+    use_default_device_settings: true
+    exposure_auto: true
+    exposure_target: 187
+    gain_auto: true
+    gain_target: 1
+    gamma_target: 1.0
+    image_horizontal_flip: false
+    image_vertical_flip: false
