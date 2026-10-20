@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Fast DDS 프로파일 — RAW 연구 취득용 (~/jsh). ~/DM/DM_clipGUI/config/fastdds_shm.xml 을 바탕으로
+  메시지 크기만 키웠다.
+
+  이 리그의 메시지:
+    BFS   image_raw  1920x1200 bayer_rggb16          4.61 MB
+    LUCID image_raw  2880x1860 bayer_rggb16 (12/16)  10.7 MB, BayerRG24 를 32-bit 컨테이너로 21.4 MB
+  DM 프로파일의 maxMessageSize 4 MB 로는 한 장이 여러 조각으로 나뉜다.
+
+    maxMessageSize 32 MB : 위 프레임이 SHM 에서 한 메시지로 나간다.
+    segment_size    1 GB : 퍼블리셔(보내는 쪽)마다 하나. LUCID 21 MB 기준 약 48장 분량의 여유.
+                           tmpfs(/dev/shm)는 실제로 쓴 만큼만 RAM 을 잡는다.
+
+  주의: 퍼블리셔(카메라 드라이버) 프로세스에도 같은 파일이 적용돼야 한다 (세그먼트는 보내는 쪽 소유).
+        ~/jsh/env.sh 와 GUI 런처가 FASTRTPS_DEFAULT_PROFILES_FILE 로 이 파일을 건다.
+-->
+<dds xmlns="http://www.eprosima.com">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>shm_raw</transport_id>
+        <type>SHM</type>
+        <segment_size>1073741824</segment_size>
+        <maxMessageSize>33554432</maxMessageSize>
+        <port_queue_capacity>8192</port_queue_capacity>
+        <healthy_check_timeout_ms>2000</healthy_check_timeout_ms>
+      </transport_descriptor>
+      <!-- 다른 PC 에서 토픽을 볼 때. 전부 로컬이면 지워도 된다. -->
+      <transport_descriptor>
+        <transport_id>udp_tuned</transport_id>
+        <type>UDPv4</type>
+        <sendBufferSize>16777216</sendBufferSize>
+        <receiveBufferSize>16777216</receiveBufferSize>
+      </transport_descriptor>
+    </transport_descriptors>
+
+    <participant profile_name="raw_shm" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>shm_raw</transport_id>
+          <transport_id>udp_tuned</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>

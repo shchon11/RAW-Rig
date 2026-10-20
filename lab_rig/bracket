@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# 브라케팅 촬영 창 — 두 카메라 동시 노출 브라케팅 → 무손실 DNG (~/jsh/tools/bracket_gui.py)
+source "$HOME/jsh/env.sh" >/dev/null
+exec "$HOME/jsh/.venv-dng/bin/python" "$HOME/jsh/tools/bracket_gui.py" "$@"
